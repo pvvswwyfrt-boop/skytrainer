@@ -4149,6 +4149,13 @@ function earClip(R) {
   else if (idx.length > 3) for (let i = 1; i + 1 < idx.length; i++) out.push(idx[0], idx[i], idx[i + 1]);   // degenerate leftovers: fan
   return out;
 }
+// inside an airfield's painted grass-and-pavement area (the airports draw their own ground, buildings and lights there)
+function rtInField(x, z, pad = 0) {
+  for (const ap of AIRPORTS) { const f = ap.field; if (!f) continue;
+    const dx = x - f[0], dz = z - f[1], c = Math.cos(f[4] || 0), s = Math.sin(f[4] || 0), u = dx * c + dz * s, v = -dx * s + dz * c;
+    if (Math.abs(u) < f[2] / 2 + pad && Math.abs(v) < f[3] / 2 + pad) return true; }
+  return false;
+}
 // ---- the ground: a canvas per tile painted from the county layers, draped over the terrain ----
 function rtGroundCanvas(D, x0, z0, S, lite) {
   const cv = document.createElement('canvas'); cv.width = cv.height = S;
@@ -4227,6 +4234,7 @@ function rtDrape(tex, x0, z0, col) {   // a 25 m grid over the terrain carrying 
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const a = H[j * (N + 1) + i], b = H[j * (N + 1) + i + 1], cc = H[(j + 1) * (N + 1) + i], d = H[(j + 1) * (N + 1) + i + 1];
     if (Math.max(a, b, cc, d) < 0.25) continue;
+    if (rtInField(x0 + (i + 0.5) * st, z0 + (j + 0.5) * st, -st)) continue;   // the airfield's own grass shows through
     V(i, j); V(i + 1, j + 1); V(i + 1, j); V(i, j); V(i, j + 1); V(i + 1, j + 1);
   }
   return m.build();
@@ -4295,10 +4303,10 @@ function rtTileBuild(ti, tj, lite, D) {
   out.ground = rtDrape(gt, x0, z0);
   const nt = rtTex(rtNightCanvas(D, 256)); out.texs.push(nt); out.gnight = rtDrape(nt, x0, z0, [1, 1, 1]);
   // buildings (not on the airfields, where the airports draw their own)
-  const apNear = nearestAirport(x0 + 500, z0 + 500), skipAp = apNear.d < 3200;
+  const apNear = nearestAirport(x0 + 500, z0 + 500), skipAp = apNear.d < 5000;
   for (const B of D.B) {
     if (lite && B.area < 70 && B.top < 5) continue;
-    if (skipAp) { const ap = nearestAirport(B.cx + x0, B.cz + z0); if (ap.d < (ap.ap.code === 'MIA' ? 2300 : 1100)) continue; }
+    if (skipAp && rtInField(B.cx + x0, B.cz + z0, 20)) continue;
     if (terrainH(B.cx + x0, B.cz + z0) < -2) continue;
     rtBuilding(b, TM, x0, z0, B, lite);
   }
@@ -4315,6 +4323,8 @@ function rtTileBuild(ti, tj, lite, D) {
       const u = hash2(ti * 7.1 + n * 0.37, tj * 3.3), v = hash2(tj * 5.7 + n * 0.53, ti * 1.9);
       const px = (u * MS) | 0, pz = (v * MS) | 0; if (M[(pz * MS + px) * 4] > 40) continue;
       const x = x0 + u * 1000, z = z0 + v * 1000, y = terrainH(x, z); if (y < 0.3) continue;
+      if (skipAp && rtInField(x, z, 60)) continue;   // keep airfields clear
+      if (paveAt(x, z) || onRunwayAt(x, z)) continue;
       if (hash2(n, ti + tj) < 0.72) canopy(b, x, y - 0.2, z, 3 + hash2(n * 1.3, tj) * 3.6, ti * 131 + tj * 17 + n);
       else palmLite(b, x, y, z, 0.85 + hash2(n * 2.1, ti) * 0.35, ti * 97 + tj * 13 + n);
     }
