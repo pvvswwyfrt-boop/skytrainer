@@ -6036,6 +6036,21 @@ function airlinerSys(st, a, c, T, V, dt) {
   return Tr;
 }
 // fractional detent index of a flap position (sets [0, 10, 20, 30] -> pos / 10)
+// wing strips, cached per aircraft: span station, area share (elliptical), washout and stall spread
+function wingStrips(a) {
+  if (a._ws) return a._ws;
+  const N = 6, out = []; let tot = 0;
+  const wash = a.washout != null ? a.washout : a.piston ? 0.05 : a.fbw ? 0.01 : 0.025;
+  const tipFirst = a.sweep || a.airliner || (!a.piston && !a.fbw && a.CLA < 5) ? 1 : 0;   // swept wings stall at the tips first
+  for (const s of [-1, 1]) for (let k = 0; k < N; k++) {
+    const eta = (k + 0.5) / N, w = Math.sqrt(1 - eta * eta * 0.96);
+    const jitter = (hash2(k * 7 + (s > 0 ? 3 : 0), 11) - 0.5) * 0.008;      // real wings are never perfectly matched
+    out.push({ s, eta, y: eta * a.b / 2, w, tw: wash * eta, dAS: wash * eta * 0.6 - tipFirst * eta * 0.035 + jitter });
+    tot += w;
+  }
+  for (const o of out) o.w /= tot;
+  return (a._ws = out);
+}
 function setIdx(a, pos) {
   const s = a.sets || [0];
   if (pos <= s[0]) return 0;
@@ -6184,7 +6199,8 @@ function stepSim(dt) {
     if (st.rpm < 0.25) st.starting += dt; else st.starting = 0;
     const tgt = st.starting > 0 && st.starting < a.startTime ? Math.min(0.3, st.starting / a.startTime * 0.3) : (a.kind === 'heli' ? 1 : 0.25 + 0.75 * c.thr * pf);
     const rate = a.kind === 'heli' ? 0.25 : a.spool;
-    st.rpm += clamp(tgt - st.rpm, -rate * dt, rate * dt * (st.rpm < 0.3 ? 0.6 : 1));
+    const up = a.kind === "heli" ? 1 : 0.45 + 0.85 * st.rpm * st.rpm, dn = a.kind === 'heli' ? 1 : 0.55 + 0.6 * st.rpm;   // spools slowly off idle, fast near the top
+    st.rpm += clamp(tgt - st.rpm, -rate * dn * dt, rate * up * dt * (st.rpm < 0.3 ? 0.6 : 1));
   } else if (a.kind !== 'heli' && !a.prop) st.rpm = Math.max(0, st.rpm - dt * 0.4);
   st.pf = pf;
   if (!SIM.opt.infFuel && st.engine && !a.prop) st.fuel = Math.max(0, st.fuel - (a.tsfc ? Math.max(a.idleFF, Math.abs(st.thrust || 0) * a.tsfc(st.mach || 0)) : a.burn * (0.15 + 0.85 * c.thr)) * dt);
@@ -6264,18 +6280,48 @@ function stepSim(dt) {
       alpha = Math.atan2(-vb[1], vb[0]);
       beta = Math.asin(clamp(vb[2] / V, -1, 1));
       const AS = a.AS - FLAP(a.flapAS);
-      let CL;
-      if (alpha < AS) CL = a.CL0 + a.CLA * alpha; else CL = Math.max(0.55, a.CL0 + a.CLA * AS - (alpha - AS) * (a.stallSlope || 3.5));
+      let CL = a.CL0 + a.CLA * alpha;
       if (alpha < -0.25) CL = Math.min(CL, a.CL0 + a.CLA * -0.25 + (alpha + 0.25) * 2);
+      // ---- wing sections (strip theory): each wing is 6 strips that see their own angle of attack
+      // (roll rate tilts the airflow on each, yaw rate speeds one wing and slows the other) and each
+      // stalls and re-attaches on its own, with a little hysteresis. The difference from the smooth
+      // linear wing becomes lift loss, extra drag and rolling/yawing moments — so wing drop,
+      // autorotation and spins come out of the aerodynamics instead of a script.
+      const WS = wingStrips(a), Vs = Math.max(V, 12), pR = st.w[0], yRr = -st.w[1];
+      if (!st.strip || st.strip.length !== WS.length) st.strip = WS.map(() => 0);
+      let dCL = 0, dCl = 0, dCD = 0, dCn = 0, nSt = 0;
+      for (let i = 0; i < WS.length; i++) {
+        const w = WS[i], side = w.s, eta = w.eta;
+        const qk = Math.max(0, 1 - side * yRr * w.y / Vs) ** 2 * (side < 0 ? lw : rw);    // local dynamic pressure
+        const ai = alpha + side * pR * w.y / Vs - w.tw;                                      // local angle of attack
+        const ASi = AS + w.dAS;
+        // flow separation isn't instant: it follows the target state over a few chord-lengths of travel
+        if (!st.stripT) st.stripT = WS.map(() => 0);
+        if (st.stripT[i] ? ai < ASi - 0.035 : ai > ASi) st.stripT[i] = st.stripT[i] ? 0 : 1;
+        st.strip[i] += (st.stripT[i] - st.strip[i]) * Math.min(1, dt * Vs / (4 * a.c));
+        const f = st.strip[i];
+        const lin = a.CL0 + a.CLA * ai, cmax = a.CL0 + a.CLA * ASi, over = Math.max(0, ai - ASi);
+        const att = ai < ASi ? lin : cmax + over * a.CLA * 0.15;                                 // attached flow rounds over near the peak
+        const sep = Math.min(att, Math.max(1.05 * Math.abs(Math.sin(2 * ai)), cmax * (a.piston ? 0.88 : 0.8) - over * (a.stallSlope || 3.5)));
+        const nl = lerp(att, sep, f), cd = f * (0.1 + clamp(over / 0.3, 0, 1) * 0.6);
+        nSt += f * w.w;
+        const dl = (nl - lin) * w.w * qk, dd = cd * w.w * qk;
+        dCL += dl; dCD += dd;
+        dCl -= side * (w.y / a.b) * dl;       // lost lift on one side rolls toward it
+        dCn += side * (w.y / a.b) * dd;        // and its drag yaws toward it
+        void eta;
+      }
+      st.stallFrac = nSt;
       if (st.fold) CL *= 1 - 0.6 * st.fold;
-      CL += FLAP(a.FCL);
+      CL += FLAP(a.FCL) + dCL * wk;
       if (a.airliner) CL = CL * (1 - 0.62 * (st.gsp || 0)) - 0.1 * (st.abrk || 0);   // spoilers dump lift
       const CLfull = CL; CL *= wk;
-      stall = alpha > AS;
-      const hg = agl + a.gear[0].p[1];
-      const ge = hg < a.b ? 0.5 + 0.5 * Math.max(0, hg) / a.b : 1;
+      stall = nSt > 0.3;
+      // ground effect (McCormick): the ground blocks the wingtip vortices — less induced drag, a bit more lift
+      const hg = Math.max(0.3, agl + a.gear[0].p[1]), gr = (16 * hg / a.b) ** 2, ge = gr / (1 + gr);
+      CL *= 1 + 0.09 * (1 - ge) * clamp(V / 30, 0, 1);
       const bentL = st.bent.wingL || 0, bentR = st.bent.wingR || 0, bentT = st.bent.tail || 0;
-      const CD = a.CD0 + (bentL + bentR + bentT) * 0.012 + FLAP(a.FCD) + a.K * ge * CL * CL + (stall ? 0.12 + clamp((alpha - AS) / 0.3, 0, 1) * 0.55 : 0) + (a.retract && c.gearDown ? 0.02 : 0) + (a.airbrake && st.abrk ? (a.airliner ? 0.028 : 0.07) * st.abrk : 0) + (st.gsp || 0) * 0.075 + (a.machDrag ? a.machDrag(M) : M > 0.75 ? 12 * (M - 0.75) ** 2 : 0) + Math.abs(beta) * 0.1;
+      const CD = a.CD0 + (bentL + bentR + bentT) * 0.012 + FLAP(a.FCD) + a.K * ge * CL * CL + dCD + (a.retract && c.gearDown ? 0.02 : 0) + (a.airbrake && st.abrk ? (a.airliner ? 0.028 : 0.07) * st.abrk : 0) + (st.gsp || 0) * 0.075 + (a.machDrag ? a.machDrag(M) : M > 0.75 ? 12 * (M - 0.75) ** 2 : 0) + Math.abs(beta) * 0.1;
       const vh = V3.mul(vb, 1 / V);
       const liftDir = V3.norm(V3.cross([0, 0, 1], vh));
       Fb = V3.add(Fb, V3.mul(liftDir, qbar * a.S * CL));
@@ -6308,24 +6354,18 @@ function stepSim(dt) {
         yawIn = lerp(yawIn, clamp(c.yaw + beta * 3 - yR * 0.6, -1, 1), blend);
       } else st.fbwI = 0;
       st.elev = pitchIn;
-      let Cm = a.CM0 * tk + (st.payload - 1) * -0.06 + FLAP(a.FCM) + (a.CMA * tk + 0.25 * (1 - tk)) * alpha + a.CMDE * pitchIn * tk + a.CMQ * (0.12 + 0.88 * tk) * q * a.c / (2 * Vd) - (stall ? 0.08 : 0);
+      let Cm = a.CM0 * tk + (st.payload - 1) * -0.06 + FLAP(a.FCM) + (a.CMA * tk + 0.25 * (1 - tk)) * alpha + a.CMDE * pitchIn * tk + a.CMQ * (0.12 + 0.88 * tk) * q * a.c / (2 * Vd) - nSt * 0.08;
       const Cl = a.CLB * beta * wk + a.CLDA * rollIn * wk + a.CLP * (0.15 + 0.85 * wk) * p * a.b / (2 * Vd) + a.CLR * yR * a.b / (2 * Vd) + (stall ? (hash2(Math.floor(performance.now() / 300), 1) - 0.5) * 0.02 : 0)
         + (lw - rw) * 0.5 * CLfull * 0.25   // one wing gone: the other one rolls you over
         + (bentR - bentL) * 0.012;           // a bent wing pulls you toward it
       // stall and spin: past the critical angle one wing lets go first, and yawing feeds autorotation
-      let ClSpin = 0, CnSpin = 0;
-      if (!a.fbw && alpha > AS) {
-        const depth = clamp((alpha - AS) / 0.12, 0, 1);
-        if (!st.wasStalled) { st.dropSide = Math.abs(beta) > 0.02 ? Math.sign(beta) : (Math.random() < 0.5 ? -1 : 1); st.wasStalled = true; }
-        // autorotation settles at roughly one turn every 3 s; yaw damping keeps it from running away
-        const spinTgt = 2.1, yRn = clamp(Math.abs(yR) / spinTgt, 0, 1.5);
-        ClSpin = depth * (0.02 * -st.dropSide + 0.035 * Math.sign(yR || 1) * Math.min(1, Math.abs(yR) / 0.6) * (1.2 - yRn)) - a.CLP * p * a.b / (2 * Vd) * depth;
-        CnSpin = depth * 0.012 * Math.sign(p || yR || 1) * Math.min(1, Math.abs(p) / 0.8) * Math.max(0, 1.2 - yRn);
-      } else st.wasStalled = false;
+      // stalled wing sections: roll damping turns into roll *driving* (autorotation) and their drag yaws the nose
+      const sk = a.spinK || (a.piston ? 0.7 : 1), ClSpin = dCl * sk, CnSpin = dCn * sk;
+      if (nSt > 0.05 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, clamp(nSt * 0.5, 0, 0.35) * clamp(V / 40, 0, 1));   // buffet
       const Cn = (a.CNB * tk - 0.03 * (1 - tk)) * beta + a.CNDR * yawIn * tk + a.CNR * (0.2 + 0.8 * tk) * yR * a.b / (2 * Vd) + a.CNDA * rollIn + (rw - lw) * 0.02;
       Mb = V3.add(Mb, [qbar * a.S * a.b * (Cl + ClSpin), -qbar * a.S * a.b * (Cn + CnSpin), qbar * a.S * a.c * Cm]);
       if (a.tvc) { st.tv = st.engine ? clamp(pitchIn, -1, 1) : 0; Mb = V3.add(Mb, [0, 0, st.tv * Math.max(0, T) * 0.34 * a.tvc * tk]); }
-      st.spin = Math.abs(yR) > 0.9 && alpha > AS ? 1 : 0;
+      st.spin = Math.abs(yR) > 0.9 && nSt > 0.4 ? 1 : 0;
       if (a.piston && T > 0) {
         // propeller: engine torque rolls left, P-factor and the corkscrew slipstream yaw left,
         // and the slipstream over the tail keeps rudder and elevator working at low speed
@@ -6454,10 +6494,21 @@ function stepSim(dt) {
       const lat = [-fh[2], 0, fh[0]];
       const vf = V3.dot(vp, fh), vl = V3.dot(vp, lat);
       const rwy = s.pave;
-      let muF = g.skid ? 0.5 : rwy ? 0.02 : 0.06, muL = g.skid ? 0.5 : 0.8;
-      if (g.brake && (c.brake || c.park || st.abFrac > 0)) muF += (rwy ? 0.6 : 0.4) * (c.brake || c.park ? 1 : st.abFrac);
+      const wet = SIM.opt.weather === 'rain' ? 1 : 0;
+      let muF = g.skid ? 0.5 : rwy ? 0.02 : 0.06, muL = g.skid ? 0.5 : (rwy ? 0.85 : 0.6) * (1 - 0.3 * wet);
+      let brk = 0;
+      if (g.brake && (c.brake || c.park || st.abFrac > 0)) { brk = (rwy ? 0.6 : 0.4) * (c.brake || c.park ? 1 : st.abFrac) * (1 - 0.4 * wet); muF += brk; }
       if (s.water) { muF = 0.6; muL = 0.6; }
-      const F = V3.add(V3.add(V3.mul(fh, -muF * N * Math.tanh(vf / 0.3)), V3.mul(lat, -muL * N * Math.tanh(vl / 0.15))), [0, N, 0]);
+      // hydroplaning on a wet runway: above ~9·sqrt(tyre psi) knots the tyre rides on water
+      if (wet && rwy && !g.skid) { const vh = (a.piston ? 25 : 60) * (g.steer ? 0.9 : 1), hp = smooth(vh, vh + 8, Math.abs(vf)); /* m/s: ~49 kt light-aircraft tyres, ~117 kt jet tyres */ muL *= 1 - 0.75 * hp; muF = Math.min(muF, lerp(muF, 0.05, hp)); }
+      const Fx = -muF * N * Math.tanh(vf / 0.3);
+      // lateral: a rolling tyre builds side force with slip angle, peaking near 7° (Pacejka-style);
+      // near standstill fall back to plain friction so parked aircraft don't creep
+      const slip = Math.atan2(vl, Math.abs(vf) + 0.01), roll = clamp((Math.abs(vf) - 1) / 3, 0, 1);
+      const circle = Math.sqrt(Math.max(0.15, 1 - (brk / Math.max(muL, 0.01)) ** 2 * 0.6));   // braking hard leaves less grip for turning
+      const Fy = -muL * N * circle * lerp(Math.tanh(vl / 0.15), Math.sin(1.9 * Math.atan(9 * slip)), g.skid ? 0 : roll);
+      if (Math.abs(slip) > 0.2 && roll > 0.5 && Math.abs(vl) > 3 && !s.water && Math.random() < dt * 25) spawnFx('tyre', P, [0, 0.5, 0], 0.8);
+      const F = V3.add(V3.add(V3.mul(fh, Fx), V3.mul(lat, Fy)), [0, N, 0]);
       Fw = V3.add(Fw, F);
       Mw = V3.add(Mw, V3.cross(r, F));
     } else { st.contacts[i] = false; st.comp[i] = Math.max(0, (st.comp[i] || 0) - dt * 2.5); }
