@@ -6,12 +6,12 @@
 <link rel="apple-touch-icon" href="icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Sky Trainer">
 <meta name="theme-color" content="#0b1a33">
 <script>if('serviceWorker' in navigator)addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));</script>
 
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <title>Sky Trainer · Mark 8</title>
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -179,6 +179,19 @@
   #dash { display: none; position: fixed; left: 0; right: 0; bottom: 0; height: 30vh; pointer-events: none;
     background: radial-gradient(120% 100% at 50% 100%, #1b1e24 55%, #2a2e36 70%, rgba(42,46,54,0) 71%); }
   @media (max-height: 380px) { .overlay h1 { font-size: 24px; } .hint { display: none; } .row { margin-top: 4px; } .go { margin-top: 6px; } }
+</style>
+<style id="appfit">
+html,body{width:100%;height:100%;background:#0b1a33}
+#gl{position:fixed;inset:0;width:100vw;height:100vh;height:100lvh}
+#minimap,#radio{left:calc(env(safe-area-inset-left) + 8px)}
+#status{left:calc(env(safe-area-inset-left) + 10px)}
+#cineCard{left:calc(env(safe-area-inset-left) + 6vw)}
+#adi{right:calc(env(safe-area-inset-right) + 8px)}
+#thr{left:calc(env(safe-area-inset-left) + 14px);bottom:calc(env(safe-area-inset-bottom)*.5 + 14px)}
+#stick{right:calc(env(safe-area-inset-right) + 14px);bottom:calc(env(safe-area-inset-bottom)*.5 + 50px)}
+#rud{right:calc(env(safe-area-inset-right) + 14px);bottom:calc(env(safe-area-inset-bottom)*.5 + 12px)}
+#wpn{right:calc(env(safe-area-inset-right) + 26px + min(104px, 30vh));bottom:calc(env(safe-area-inset-bottom)*.5 + 50px)}
+#btns{bottom:calc(env(safe-area-inset-bottom)*.5 + 14px)}
 </style>
 </head>
 <body class="inmenu">
