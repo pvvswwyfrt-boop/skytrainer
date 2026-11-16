@@ -300,6 +300,7 @@ html,body{width:100%;height:100%;background:#0b1a33}
 <div id="nogl">This flight sim needs WebGL, which isn't available in this browser.</div>
 <script src="b2data.js"></script>
 <script src="bldgdata.js"></script>
+<script src="ctiles.js"></script>
 <script src="b737data.js"></script>
 <script src="b737ck.js"></script>
 <script src="f22data.js"></script>
@@ -3985,12 +3986,19 @@ function cityTilesUpdate(eye) {
   let built = 0; const out = [], now = performance.now();
   for (const [i, j, lite] of want) {
     const k = i + ',' + j + (lite ? 'L' : 'F'); let t = CITY_T.tiles.get(k);
-    if (!t && built < 1) { t = { mesh: cityTileBuild(i, j, lite), t: 0 }; CITY_T.tiles.set(k, t); built++; }
+    if (!t && built < 1) {
+      const D = rtTile(i, j);   // the county's real buildings and streets, when that pack has arrived
+      if (D !== null) { t = { mesh: D ? rtTileBuild(i, j, lite, D) : cityTileBuild(i, j, lite), t: 0, real: !!D }; CITY_T.tiles.set(k, t); built++; }
+    }
     if (!t && !lite) t = CITY_T.tiles.get(i + ',' + j + 'L');   // full detail still coming: show the lite tile meanwhile
     if (!t && lite) t = CITY_T.tiles.get(i + ',' + j + 'F');
     if (t) { t.t = now; out.push(t.mesh); }
   }
-  if (CITY_T.tiles.size > 70) { const old = [...CITY_T.tiles.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, CITY_T.tiles.size - 70); for (const [k, t] of old) { if (t.t === now) continue; for (const m of [t.mesh.plain, ...t.mesh.day, ...t.mesh.night]) R.gl.deleteBuffer(m.buf); CITY_T.tiles.delete(k); } }
+  const cap = rtOn() ? 40 : 70;
+  if (CITY_T.tiles.size > cap) { const old = [...CITY_T.tiles.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, CITY_T.tiles.size - cap); for (const [k, t] of old) { if (t.t === now) continue;
+    for (const m of [t.mesh.plain, ...t.mesh.day, ...t.mesh.night, t.mesh.ground, t.mesh.gnight]) if (m) R.gl.deleteBuffer(m.buf);
+    for (const tx of t.mesh.texs || []) R.gl.deleteTexture(tx.t);
+    CITY_T.tiles.delete(k); } }
   return out;
 }
 
@@ -4062,6 +4070,258 @@ function drawBoats(eye) {
   for (const b of BOATS.list) { if (V3.len(V3.sub(b.p, eye)) > 12000) continue;
     const yaw = Math.atan2(-b.f[2], b.f[0]), q = Q.mul(Q.axis([0, 1, 0], yaw), Q.axis([0, 0, 1], 0.03 + Math.sin(t * 1.3 + b.a * 5) * 0.015 + b.spd * 0.002));   // bow up a touch, rocking on the chop
     draw(BOATS.m[b.kind], M4.fromQP(q, [b.p[0], -b.len * 0.03 + Math.sin(t * 1.7 + b.a * 3) * 0.08, b.p[2]], 1)); }
+}
+
+// ===================== Real Miami-Dade, streamed: every building, street, canal, lake, park and golf course =====================
+// Data: Miami-Dade County open data (BuildingModel3D roofs → footprints and heights; StreetNetwork centrelines; water, parks,
+// golf). Packed into 4 km files of sixteen 1 km tiles (t/cXX_YY.bin) and fetched as the camera approaches.
+const RT = { packs: new Set((typeof CTILE_PACKS !== 'undefined' ? CTILE_PACKS : []).map(p => p[0] + ',' + p[1])), data: new Map(), pend: new Set(), base: 't/', fails: 0 };
+const RD_W = [9, 30, 22, 16, 12, 8, 6, 7, 5, 5];   // paved width by county road class (ramps, expressways, arterials … alleys, dirt)
+function rtOn() { return RT.packs.size > 0 && RT.fails < 6; }
+// returns the parsed tile, null while its pack is still downloading, false if there is no county data there
+function rtTile(i, j) {
+  if (!rtOn()) return false;
+  const pi = Math.floor(i / 4), pj = Math.floor(j / 4), key = pi + ',' + pj;
+  if (!RT.packs.has(key)) return false;
+  const P = RT.data.get(key);
+  if (P === undefined) {
+    if (!RT.pend.has(key)) {
+      RT.pend.add(key);
+      fetch(RT.base + 'c' + (pi + 10) + '_' + (pj + 10) + '.bin').then(r => r.ok ? r.arrayBuffer() : null).then(b => {
+        RT.data.set(key, b ? rtPack(b) : 'x'); if (!b) RT.fails++; RT.pend.delete(key);
+      }).catch(() => { RT.data.set(key, 'x'); RT.fails++; RT.pend.delete(key); });
+    }
+    return null;
+  }
+  if (P === 'x') return false;
+  const k = (i - pi * 4) + (j - pj * 4) * 4, t = P[k];
+  if (!t) return false;
+  if (!t.parsed) P[k] = rtParse(t.dv, t.off, t.len), P[k].parsed = true;
+  return P[k];
+}
+function rtPack(buf) {
+  const dv = new DataView(buf), out = [];
+  for (let k = 0; k < 16; k++) { const off = dv.getUint32(4 + k * 8, true), len = dv.getUint32(8 + k * 8, true); out.push(len ? { dv, off, len } : null); }
+  return out;
+}
+function rtParse(dv, o) {
+  const i0 = o % 97;
+  const nb = dv.getUint32(o, true), nr = dv.getUint32(o + 4, true), np = dv.getUint32(o + 8, true); o += 12;
+  const B = [], Rd = [], Pl = [];
+  const pts = (n, cx, cz) => { const a = new Array(n); for (let i = 0; i < n; i++) { a[i] = [cx + dv.getInt16(o, true) / 10, cz + dv.getInt16(o + 2, true) / 10]; o += 4; } return a; };
+  for (let k = 0; k < nb; k++) {
+    const cx = dv.getUint16(o, true) / 50, cz = dv.getUint16(o + 2, true) / 50, eave = dv.getUint8(o + 4) / 10, top = dv.getUint8(o + 5) / 10, fl = dv.getUint8(o + 6), n = dv.getUint8(o + 7); o += 8;
+    let ring = pts(n, cx, cz), A = 0;
+    for (let i = 0; i < n; i++) { const p = ring[i], q = ring[(i + 1) % n]; A += p[0] * q[1] - q[0] * p[1]; }
+    if (A < 0) ring = ring.reverse();
+    const area = Math.abs(A) / 2, house = area < 480 && top < 6.8 && hash2(cx * 0.37 + i0 * 0.1, cz * 0.41) < 0.8;   // the county roofs are flat slabs: most Miami homes have hip roofs
+    B.push({ cx, cz, eave, top, pit: (fl & 1) || house ? 1 : 0, ring, area });
+  }
+  for (let k = 0; k < nr; k++) { const cl = dv.getUint8(o), z = dv.getUint8(o + 1), n = dv.getUint16(o + 2, true); o += 4; Rd.push({ cl, z, p: pts(n, 0, 0) }); }
+  for (let k = 0; k < np; k++) {
+    const ty = dv.getUint8(o), nrg = dv.getUint8(o + 1); o += 2; const rings = [];
+    for (let r = 0; r < nrg; r++) { const n = dv.getUint16(o, true); o += 2; rings.push(pts(n, 0, 0)); }
+    Pl.push({ ty, rings });
+  }
+  Rd.sort((a, b) => (a.z - b.z) || (b.cl - a.cl));   // minor roads first, expressways and overpasses painted last
+  return { B, Rd, Pl };
+}
+// ear clipping for a simple polygon wound counter-clockwise in x,z (positive shoelace)
+function earClip(R) {
+  const n = R.length, idx = [...Array(n).keys()], out = [];
+  if (n < 3) return out;
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const inTri = (p, a, b, c) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
+  let guard = 0;
+  while (idx.length > 3 && guard++ < 4 * n) {
+    let cut = false;
+    for (let i = 0; i < idx.length; i++) {
+      const ia = idx[(i + idx.length - 1) % idx.length], ib = idx[i], ic = idx[(i + 1) % idx.length], a = R[ia], b = R[ib], c = R[ic];
+      if (cross(a, b, c) <= 1e-6) continue;
+      let ok = true;
+      for (const j of idx) { if (j === ia || j === ib || j === ic) continue; if (inTri(R[j], a, b, c)) { ok = false; break; } }
+      if (!ok) continue;
+      out.push(ia, ib, ic); idx.splice(i, 1); cut = true; break;
+    }
+    if (!cut) break;
+  }
+  if (idx.length === 3) out.push(idx[0], idx[1], idx[2]);
+  else if (idx.length > 3) for (let i = 1; i + 1 < idx.length; i++) out.push(idx[0], idx[i], idx[i + 1]);   // degenerate leftovers: fan
+  return out;
+}
+// ---- the ground: a canvas per tile painted from the county layers, draped over the terrain ----
+function rtGroundCanvas(D, x0, z0, S, lite) {
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d'), k = S / 1000, R = (a, b) => hash2(x0 * 0.001 + a * 1.7, z0 * 0.001 + b * 2.3);
+  const path = (pts, ox = 0, oz = 0) => { g.beginPath(); pts.forEach((p, i) => { const X = (p[0] + ox) * k, Z = (p[1] + oz) * k; i ? g.lineTo(X, Z) : g.moveTo(X, Z); }); };
+  // lots: lawns and scrub, patchy
+  let cov = 0; for (const b of D.B) cov += b.area; cov /= 1e6;   // share of the tile under roofs
+  const dry = clamp(cov * 3, 0, 1);
+  g.fillStyle = `rgb(${96 + dry * 30 | 0},${110 + dry * 10 | 0},${70 + dry * 22 | 0})`; g.fillRect(0, 0, S, S);
+  for (let i = 0; i < (lite ? 80 : 260); i++) {
+    const r = R(i, 4); g.fillStyle = r < 0.4 ? 'rgba(78,98,56,0.45)' : r < 0.7 ? 'rgba(136,132,96,0.35)' : r < 0.85 ? 'rgba(112,124,74,0.4)' : 'rgba(150,146,130,0.3)';
+    g.beginPath(); g.ellipse(R(i, 1) * S, R(i, 2) * S, (12 + R(i, 3) * 60) * k, (8 + R(i, 5) * 40) * k, R(i, 6) * 3, 0, 7); g.fill();
+  }
+  // parks and golf, then water
+  for (const p of D.Pl) if (p.ty === 2 || p.ty === 3) {
+    g.fillStyle = p.ty === 3 ? 'rgb(92,140,66)' : 'rgb(84,124,60)';
+    g.beginPath(); for (const r of p.rings) r.forEach((q, i) => i ? g.lineTo(q[0] * k, q[1] * k) : g.moveTo(q[0] * k, q[1] * k)); g.fill('evenodd');
+    if (p.ty === 3 && !lite) { g.strokeStyle = 'rgba(120,170,84,0.6)'; g.lineWidth = 18 * k; path(p.rings[0]); g.closePath(); g.stroke(); }
+  }
+  g.lineJoin = 'round'; g.lineCap = 'round';
+  // hardscape: plazas and walks round every flat-roofed building; denser blocks read as mostly paved
+  for (const b of D.B) if (!b.pit && b.area > 120) { g.strokeStyle = 'rgb(160,156,146)'; g.lineWidth = (b.area > 600 ? 14 : 8) * k; path(b.ring); g.closePath(); g.stroke(); g.fillStyle = 'rgb(160,156,146)'; g.fill(); }
+  // parking around big flat-roofed buildings (shops, offices, warehouses)
+  for (const b of D.B) if (!b.pit && b.area > 1400) {
+    const w = clamp(Math.sqrt(b.area) * 0.55, 14, 70);
+    g.strokeStyle = 'rgb(92,92,90)'; g.lineWidth = w * 2 * k; path(b.ring); g.closePath(); g.stroke();
+    g.fillStyle = 'rgb(92,92,90)'; g.fill();
+    if (!lite) { g.strokeStyle = 'rgba(230,230,225,0.5)'; g.lineWidth = Math.max(0.5, 0.2 * k * 4); g.setLineDash([2.5 * k, 2.5 * k]); path(b.ring); g.closePath(); g.lineWidth = w * 1.2 * k; g.globalAlpha = 0.18; g.stroke(); g.globalAlpha = 1; g.setLineDash([]); }
+  }
+  // driveways and pools for houses (pitched roofs on small lots)
+  if (!lite) for (const b of D.B) if (b.pit && b.area < 450) {
+    if (hash2(b.cx * 0.31, b.cz * 0.17) < 0.33) {   // a pool in the yard, on the side away from the nearest road is unknown — pick a side by hash
+      const s = hash2(b.cx * 0.7, b.cz * 0.9) < 0.5 ? -1 : 1, px = b.cx + s * (Math.sqrt(b.area) * 0.5 + 6), pz = b.cz;
+      g.fillStyle = 'rgb(90,168,190)'; g.fillRect((px - 3) * k, (pz - 5) * k, 6 * k, 10 * k);
+      g.fillStyle = 'rgba(220,214,200,0.9)'; g.fillRect((px - 4) * k, (pz - 6) * k, 8 * k, 1.2 * k);
+    }
+  }
+  for (const p of D.Pl) if (p.ty === 1) {
+    g.fillStyle = 'rgb(54,96,104)'; g.beginPath(); for (const r of p.rings) r.forEach((q, i) => i ? g.lineTo(q[0] * k, q[1] * k) : g.moveTo(q[0] * k, q[1] * k)); g.fill('evenodd');
+    if (!lite) { g.strokeStyle = 'rgba(150,140,110,0.7)'; g.lineWidth = 2.5 * k; g.stroke(); }
+  }
+  // streets: sidewalk/verge, asphalt, then markings
+  for (const r of D.Rd) { const w = RD_W[r.cl] || 8; if (r.cl === 1 || r.cl === 0 || r.cl === 9) continue; g.strokeStyle = 'rgb(168,164,152)'; g.lineWidth = (w + 4) * k; path(r.p); g.stroke(); }
+  for (const r of D.Rd) { const w = RD_W[r.cl] || 8; g.strokeStyle = r.cl === 9 ? 'rgb(150,132,100)' : r.cl === 1 ? 'rgb(84,86,88)' : 'rgb(70,71,73)'; g.lineWidth = w * k; path(r.p); g.stroke(); }
+  if (!lite) for (const r of D.Rd) {
+    if (r.cl === 2 || r.cl === 3) { g.strokeStyle = 'rgba(224,186,70,0.9)'; g.lineWidth = Math.max(0.6, 0.35 * k); path(r.p, 0.2, 0); g.stroke(); path(r.p, -0.2, 0); g.stroke(); }
+    if (r.cl === 1 || r.cl === 2) { g.strokeStyle = 'rgba(235,235,230,0.75)'; g.lineWidth = Math.max(0.5, 0.2 * k); g.setLineDash([3 * k, 9 * k]); path(r.p, 0, (RD_W[r.cl] / 4)); g.stroke(); path(r.p, 0, -(RD_W[r.cl] / 4)); g.stroke(); g.setLineDash([]); }
+  }
+  return cv;
+}
+function rtNightCanvas(D, S) {   // street lights and lit parking lots, added on top at night
+  const cv = document.createElement('canvas'); cv.width = cv.height = S;
+  const g = cv.getContext('2d'), k = S / 1000;
+  g.fillStyle = '#000'; g.fillRect(0, 0, S, S); g.lineCap = 'round'; g.lineJoin = 'round';
+  for (const r of D.Rd) { if (r.cl === 9 || r.cl === 8) continue; const w = RD_W[r.cl] || 8; g.strokeStyle = r.cl <= 2 ? 'rgba(255,170,90,0.75)' : 'rgba(255,190,120,0.45)'; g.lineWidth = (w + 6) * k; g.beginPath(); r.p.forEach((p, i) => i ? g.lineTo(p[0] * k, p[1] * k) : g.moveTo(p[0] * k, p[1] * k)); g.stroke(); }
+  for (const b of D.B) if (!b.pit && b.area > 1400) { const w = clamp(Math.sqrt(b.area) * 0.55, 14, 70); g.strokeStyle = 'rgba(255,220,170,0.45)'; g.lineWidth = w * 2 * k; g.beginPath(); b.ring.forEach((p, i) => i ? g.lineTo(p[0] * k, p[1] * k) : g.moveTo(p[0] * k, p[1] * k)); g.closePath(); g.stroke(); }
+  return cv;
+}
+function rtTex(cv) {
+  const gl = R.gl, t = gl.createTexture();
+  gl.activeTexture(gl.TEXTURE4); gl.bindTexture(gl.TEXTURE_2D, t);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, cv);
+  gl.generateMipmap(gl.TEXTURE_2D);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  const an = gl.getExtension('EXT_texture_filter_anisotropic') || gl.getExtension('WEBKIT_EXT_texture_filter_anisotropic');
+  if (an) gl.texParameterf(gl.TEXTURE_2D, an.TEXTURE_MAX_ANISOTROPY_EXT, Math.min(8, gl.getParameter(an.MAX_TEXTURE_MAX_ANISOTROPY_EXT)));
+  gl.activeTexture(gl.TEXTURE0);
+  return { t, ready: true };
+}
+function rtDrape(tex, x0, z0, col) {   // a 25 m grid over the terrain carrying the tile's texture; cells under the sea are left out
+  const m = new TMB(tex), N = 40, st = 1000 / N, H = [];
+  for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) H.push(terrainH(x0 + i * st, z0 + j * st));
+  const c = col || [1, 1, 1];
+  const V = (i, j) => { const h = H[j * (N + 1) + i], x = x0 + i * st, z = z0 + j * st; m.d.push(x, Math.max(h, 0.2) + 0.04, z, 0, 1, 0, c[0], c[1], c[2], 0, i / N, j / N); };
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const a = H[j * (N + 1) + i], b = H[j * (N + 1) + i + 1], cc = H[(j + 1) * (N + 1) + i], d = H[(j + 1) * (N + 1) + i + 1];
+    if (Math.max(a, b, cc, d) < 0.25) continue;
+    V(i, j); V(i + 1, j + 1); V(i + 1, j); V(i, j); V(i, j + 1); V(i + 1, j + 1);
+  }
+  return m.build();
+}
+// ---- buildings ----
+function hipRoofPoly(b, R, e, rise, rc) {   // hip roof over a near-rectangular footprint: orient to the longest edge
+  let L = 0, ang = 0;
+  for (let i = 0; i < R.length; i++) { const p = R[i], q = R[(i + 1) % R.length], l = Math.hypot(q[0] - p[0], q[1] - p[1]); if (l > L) { L = l; ang = Math.atan2(q[1] - p[1], q[0] - p[0]); } }
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  let u0 = 1e9, u1 = -1e9, v0 = 1e9, v1 = -1e9;
+  for (const p of R) { const u = p[0] * ca + p[1] * sa, v = -p[0] * sa + p[1] * ca; u0 = Math.min(u0, u); u1 = Math.max(u1, u); v0 = Math.min(v0, v); v1 = Math.max(v1, v); }
+  let A = 0; for (let i = 0; i < R.length; i++) { const p = R[i], q = R[(i + 1) % R.length]; A += p[0] * q[1] - q[0] * p[1]; }
+  if (Math.abs(A) / 2 < 0.78 * (u1 - u0) * (v1 - v0)) return false;   // L-shapes and odd outlines keep a flat roof
+  const ov = 0.6, hw = (u1 - u0) / 2 + ov, hd = (v1 - v0) / 2 + ov, cu = (u0 + u1) / 2, cv = (v0 + v1) / 2;
+  const W = (u, v, y) => [u * ca - v * sa, y, u * sa + v * ca];
+  const rx = Math.max(0, hw - hd), top = e + rise;
+  const a = W(cu - hw, cv - hd, e), bq = W(cu + hw, cv - hd, e), cq = W(cu + hw, cv + hd, e), dq = W(cu - hw, cv + hd, e), r1 = W(cu - rx, cv, top), r2 = W(cu + rx, cv, top), ctr = W(cu, cv, e - 5);
+  b.tri(a, bq, r2, V3.mul(rc, 0.9), ctr); b.tri(a, r2, r1, V3.mul(rc, 0.9), ctr); b.tri(cq, dq, r1, rc, ctr); b.tri(cq, r1, r2, rc, ctr); b.tri(bq, cq, r2, V3.mul(rc, 0.96), ctr); b.tri(dq, a, r1, V3.mul(rc, 0.96), ctr);
+  return true;
+}
+function rtBuilding(b, TM, x0, z0, B, lite) {
+  const R = B.ring.map(p => [p[0] + x0, p[1] + z0]), cx = B.cx + x0, cz = B.cz + z0;
+  const y0 = Math.max(terrainH(cx, cz), 0.25) - 0.3, h = hash2(cx * 0.013, cz * 0.017), h2 = hash2(cx * 0.029, cz * 0.011);
+  let wallTop = y0 + 0.3 + Math.max(2.6, B.eave);
+  if (B.pit && B.area < 600) { let mnd = 1e9; for (const p of R) mnd = Math.min(mnd, Math.hypot(p[0] - cx, p[1] - cz)); wallTop = y0 + 0.3 + Math.max(2.6, B.top - clamp(mnd * 0.45, 1.2, 3.2) * 0.55); }
+  const ctr = [cx, y0 + 1, cz];
+  if (B.top >= 7.5 && !lite) {   // two storeys and up: textured facades with windows (and lights at night)
+    const st = B.area > 2500 ? (h < 0.5 ? 'beige' : 'silver') : (h < 0.6 ? 'beige' : 'white');
+    polyWalls(TM, R, y0, wallTop, st, st === 'beige' ? WALLS[(h2 * WALLS.length) | 0] : null);
+  } else {
+    const wall = B.area > 1400 && !B.pit ? [0.84 + h * 0.08, 0.83 + h * 0.07, 0.79 + h * 0.06] : WALLS[(h2 * WALLS.length) | 0];
+    for (let i = 0; i < R.length; i++) {
+      const p = R[i], q = R[(i + 1) % R.length];
+      const sh = 0.9 + 0.1 * Math.abs(Math.sin(Math.atan2(q[1] - p[1], q[0] - p[0]) + 0.6));
+      b.quad([p[0], y0, p[1]], [q[0], y0, q[1]], [q[0], wallTop, q[1]], [p[0], wallTop, p[1]], V3.mul(wall, sh), ctr);
+    }
+  }
+  if (B.pit) {
+    const rc = h < 0.45 ? ROOFS[(h2 * 3) | 0] : h < 0.85 ? ROOFS[3 + ((h2 * 2) | 0)] : ROOFS[(h2 * ROOFS.length) | 0];
+    let mnd = 1e9; for (const p of R) mnd = Math.min(mnd, Math.hypot(p[0] - cx, p[1] - cz));
+    const rise = clamp(mnd * 0.45, 1.2, 3.2), wt = y0 + 0.3 + Math.max(2.6, B.top - rise * 0.55);
+    if (R.length <= 8 && B.area < 600) {
+      // walls were built to wallTop; hip roofs sit lower than the slab top
+      if (hipRoofPoly(b, R, Math.min(wallTop, wt), rise, rc)) { /* done */ }
+      else { const T = earClip(R), ry = wallTop + 0.02; for (let i = 0; i < T.length; i += 3) { const a = R[T[i]], c = R[T[i + 1]], d = R[T[i + 2]]; b.tri([a[0], ry, a[1]], [c[0], ry, c[1]], [d[0], ry, d[1]], V3.mul(rc, 1.05), [cx, ry - 50, cz]); } }
+    } else { const T = earClip(R); for (let i = 0; i < T.length; i += 3) { const a = R[T[i]], c = R[T[i + 1]], d = R[T[i + 2]]; b.tri([a[0], wallTop + rise * 0.4, a[1]], [c[0], wallTop + rise * 0.4, c[1]], [d[0], wallTop + rise * 0.4, d[1]], rc, [cx, wallTop - 50, cz]); }
+      for (let i = 0; i < R.length; i++) { const p = R[i], q = R[(i + 1) % R.length]; b.quad([p[0], wallTop, p[1]], [q[0], wallTop, q[1]], [q[0], wallTop + rise * 0.4, q[1]], [p[0], wallTop + rise * 0.4, p[1]], V3.mul(rc, 0.85), ctr); } }
+  } else {
+    const rc = B.area > 1400 ? [0.8 + h * 0.08, 0.8 + h * 0.08, 0.78 + h * 0.06] : [0.74 + h * 0.14, 0.74 + h * 0.14, 0.72 + h * 0.12];
+    const T = earClip(R), ry = wallTop + 0.02;
+    for (let i = 0; i < T.length; i += 3) { const a = R[T[i]], c = R[T[i + 1]], d = R[T[i + 2]]; b.tri([a[0], ry, a[1]], [c[0], ry, c[1]], [d[0], ry, d[1]], rc, [cx, ry - 50, cz]); }
+    if (!lite && B.area > 300) {   // rooftop A/C units
+      const n = Math.min(6, 1 + (B.area / 900) | 0);
+      for (let k = 0; k < n; k++) { const t = hash2(cx + k * 3.1, cz), s = hash2(cx, cz + k * 2.7), p = R[(k * 3) % R.length];
+        const ux = cx + (p[0] - cx) * (0.2 + t * 0.4), uz = cz + (p[1] - cz) * (0.2 + s * 0.4); b.box([ux, ry + 0.7, uz], [2.6, 1.4, 2.2], [0.72, 0.73, 0.74]); }
+    }
+  }
+}
+// ---- one real tile ----
+function rtTileBuild(ti, tj, lite, D) {
+  const x0 = ti * 1000, z0 = tj * 1000, b = new MB(), TM = { plain: b };
+  for (const s of TILE_STY) TM[s] = { day: new TMB(FAC[s].day), night: new TMB(FAC[s].night) };
+  const out = { plain: null, day: [], night: [], ground: null, gnight: null, texs: [] };
+  // ground
+  const S = lite ? 512 : 1024, gt = rtTex(rtGroundCanvas(D, x0, z0, S, lite)); out.texs.push(gt);
+  out.ground = rtDrape(gt, x0, z0);
+  const nt = rtTex(rtNightCanvas(D, 256)); out.texs.push(nt); out.gnight = rtDrape(nt, x0, z0, [1, 1, 1]);
+  // buildings (not on the airfields, where the airports draw their own)
+  const apNear = nearestAirport(x0 + 500, z0 + 500), skipAp = apNear.d < 3200;
+  for (const B of D.B) {
+    if (lite && B.area < 70 && B.top < 5) continue;
+    if (skipAp) { const ap = nearestAirport(B.cx + x0, B.cz + z0); if (ap.d < (ap.ap.code === 'MIA' ? 2300 : 1100)) continue; }
+    if (terrainH(B.cx + x0, B.cz + z0) < -2) continue;
+    rtBuilding(b, TM, x0, z0, B, lite);
+  }
+  // trees on the open ground: anywhere that isn't a road, water, a building or a parking lot
+  if (!lite) {
+    const MS = 250, mk = document.createElement('canvas'); mk.width = mk.height = MS;
+    const g = mk.getContext('2d', { willReadFrequently: true }), k = MS / 1000; g.fillStyle = '#000'; g.fillRect(0, 0, MS, MS); g.fillStyle = g.strokeStyle = '#fff'; g.lineCap = 'round'; g.lineJoin = 'round';
+    for (const r of D.Rd) { g.lineWidth = ((RD_W[r.cl] || 8) + 5) * k; g.beginPath(); r.p.forEach((p, i) => i ? g.lineTo(p[0] * k, p[1] * k) : g.moveTo(p[0] * k, p[1] * k)); g.stroke(); }
+    for (const p of D.Pl) if (p.ty === 1) { g.beginPath(); for (const rr of p.rings) rr.forEach((q, i) => i ? g.lineTo(q[0] * k, q[1] * k) : g.moveTo(q[0] * k, q[1] * k)); g.fill('evenodd'); }
+    for (const B of D.B) { g.lineWidth = (!B.pit && B.area > 1400 ? clamp(Math.sqrt(B.area) * 0.55, 14, 70) * 2 : 4) * k; g.beginPath(); B.ring.forEach((q, i) => i ? g.lineTo(q[0] * k, q[1] * k) : g.moveTo(q[0] * k, q[1] * k)); g.closePath(); g.fill(); g.stroke(); }
+    const M = g.getImageData(0, 0, MS, MS).data;
+    const dens = clamp(D.B.length / 700, 0.35, 1.5), NT = Math.round(1500 * dens);
+    for (let n = 0; n < NT; n++) {
+      const u = hash2(ti * 7.1 + n * 0.37, tj * 3.3), v = hash2(tj * 5.7 + n * 0.53, ti * 1.9);
+      const px = (u * MS) | 0, pz = (v * MS) | 0; if (M[(pz * MS + px) * 4] > 40) continue;
+      const x = x0 + u * 1000, z = z0 + v * 1000, y = terrainH(x, z); if (y < 0.3) continue;
+      if (hash2(n, ti + tj) < 0.72) canopy(b, x, y - 0.2, z, 3 + hash2(n * 1.3, tj) * 3.6, ti * 131 + tj * 17 + n);
+      else palmLite(b, x, y, z, 0.85 + hash2(n * 2.1, ti) * 0.35, ti * 97 + tj * 13 + n);
+    }
+  }
+  out.plain = b.build();
+  for (const s of TILE_STY) if (TM[s].day.d.length) { out.day.push(TM[s].day.build()); out.night.push(TM[s].night.build()); }
+  return out;
 }
 
 // ===================== Northrop Grumman B-2A Spirit =====================
@@ -11332,7 +11592,12 @@ function render() {
   if (env.lightK > 0) draw(G.city.crown, I, { add: true, unlit: 1, alpha: Math.min(1, env.lightK * 1.3), fogMul: 0.3 });   // LED crowns
   if (qual().traffic !== false && TRAFFIC.segs && env.lightK < 0.9) { if ((CARS.f++ % 3) === 0 || !CARS.mesh) carsUpdate(cam.eye, performance.now() / 1000); if (CARS.mesh && CARS.mesh.n) draw(CARS.mesh, I); }   // cars and trucks by day
   stepBoats(1 / 60, cam.eye); drawBoats(cam.eye);
-  for (const t of cityTilesUpdate(cam.eye)) { draw(t.plain, I); for (const d of t.day) draw(d, I); if (env.lightK > 0) for (const d of t.night) draw(d, I, { add: true, unlit: 1, alpha: Math.min(1, env.lightK * 1.2), fogMul: 0.35 }); }
+  const ctl = cityTilesUpdate(cam.eye);
+  gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1.5, -4.5);   // real county ground: above the terrain, under the airport pavement
+  for (const t of ctl) if (t.ground) draw(t.ground, I);
+  if (env.lightK > 0) for (const t of ctl) if (t.gnight) draw(t.gnight, I, { add: true, unlit: 1, alpha: Math.min(0.99, env.lightK * 0.9), fogMul: 0.35 });
+  gl.disable(gl.POLYGON_OFFSET_FILL);
+  for (const t of ctl) { draw(t.plain, I); for (const d of t.day) draw(d, I); if (env.lightK > 0) for (const d of t.night) draw(d, I, { add: true, unlit: 1, alpha: Math.min(1, env.lightK * 1.2), fogMul: 0.35 }); }
   rangeDraw();
   const lampTint = env.lightK > 0 ? [1, 1, 1] : [0.55, 0.5, 0.42];
   draw(G.ap.lights, I, { tint: lampTint, fogMul: env.lightK ? 0.3 : 1 });
