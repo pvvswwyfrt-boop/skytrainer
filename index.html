@@ -4074,7 +4074,7 @@ function drawBoats(eye) {
 
 // ===================== Real Miami-Dade, streamed: every building, street, canal, lake, park and golf course =====================
 // Data: Miami-Dade County open data (BuildingModel3D roofs → footprints and heights; StreetNetwork centrelines; water, parks,
-// golf). Packed into 4 km files of sixteen 1 km tiles (t/cXX_YY.bin) and fetched as the camera approaches.
+// golf). Packed into 4 km files of sixteen 1 km tiles (t/cXX_YY.wasm) and fetched as the camera approaches.
 const RT = { packs: new Set((typeof CTILE_PACKS !== 'undefined' ? CTILE_PACKS : []).map(p => p[0] + ',' + p[1])), data: new Map(), pend: new Set(), base: 't/', fails: 0 };
 const RD_W = [9, 30, 22, 16, 12, 8, 6, 7, 5, 5];   // paved width by county road class (ramps, expressways, arterials … alleys, dirt)
 function rtOn() { return RT.packs.size > 0 && RT.fails < 6; }
@@ -4087,7 +4087,7 @@ function rtTile(i, j) {
   if (P === undefined) {
     if (!RT.pend.has(key)) {
       RT.pend.add(key);
-      fetch(RT.base + 'c' + (pi + 10) + '_' + (pj + 10) + '.bin').then(r => r.ok ? r.arrayBuffer() : null).then(b => {
+      fetch(RT.base + 'c' + (pi + 10) + '_' + (pj + 10) + '.wasm').then(r => r.ok ? r.arrayBuffer() : null).then(b => {
         RT.data.set(key, b ? rtPack(b) : 'x'); if (!b) RT.fails++; RT.pend.delete(key);
       }).catch(() => { RT.data.set(key, 'x'); RT.fails++; RT.pend.delete(key); });
     }
