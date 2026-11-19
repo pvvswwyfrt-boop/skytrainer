@@ -5611,17 +5611,23 @@ const AC = {
   },
   f22: {
     key: 'f22', name: 'F-22 Raptor', sub: '5th-gen stealth air-dominance fighter', kind: 'fixed', build: buildF22, fbw: true, gLim: 9, retract: true, canopy: true, airbrake: true, f22: true, abT: 0.85,
-    weapons: { m: [[2.25, -0.75, -1.5], [2.25, -0.75, 1.5]], b: [[2.2, -1.05, -0.5], [2.2, -1.05, 0.5]] },   // internal bays: doors open to launch
+    // internal bays: AIM-9 Sidewinders on trapeze rails in the two side bays; six AIM-120C AMRAAMs on vertical ejectors in the main
+    // bay under the inlets (centre missiles staggered ahead); the air-to-ground load swaps four AMRAAMs for two 1,000 lb GBU-32 JDAMs
+    weapons: { m: [[2.25, -0.75, -1.5], [2.25, -0.75, 1.5]], r: [[2.0, -1.02, -0.92], [2.7, -1.02, -0.52], [2.0, -1.02, -0.17], [2.0, -1.02, 0.17], [2.7, -1.02, 0.52], [2.0, -1.02, 0.92]], b: [[2.2, -1.05, -0.5], [2.2, -1.05, 0.5]], loadouts: true },
     mass: 19700, fuelMax: 8200, tsfc: M => 1.84e-5 * (1 + 0.22 * Math.min(M, 2)) + (SIM.st.ab || 0) * 3.6e-5, idleFF: 0.22, negG: -2.8, I: [45000, 290000, 250000],
-    S: 78, b: 13.56, c: 6.0, CD0: 0.0165, K: 0.15, CL0: 0.05, CLA: 3.6, AS: 28 * D2R, stallSlope: 1.1, fbwAoA: 40 * D2R, aoaFlame: 1.3,
+    // 840 sq ft wing, 42° leading-edge sweep, AR 2.36, twisted +0.5° at the root to -3.1° at the tip; lift slope ~3.3 per radian (Virginia Tech study)
+    S: 78, b: 13.56, c: 6.0, CD0: 0.0092, K: 0.13, CL0: 0.05, CLA: 3.4, /* zero-lift drag ~85 counts subsonic (Virginia Tech F-22 study) */ AS: 28 * D2R, stallSlope: 1.1, washout: 0.063, sweep: true, lef: true,
+    // fly-by-wire: 40° angle-of-attack limit normally; pull through the sidestick's soft stop for the high-AoA / high-pitch-rate mode (60°+)
+    fbwAoA: 40 * D2R, fbwAoA2: 64 * D2R, aoaFlame: 1.3,
     CM0: 0.0, CMA: -0.35, CMDE: 0.32, CMQ: -9, CLB: -0.06, CLDA: 0.055, CLP: -0.32, CLR: 0.06, CNB: 0.12, CNDR: 0.035, CNR: -0.2, CNDA: 0, CYB: -0.8,
     // two F119s: about 116 kN dry and 156 kN in reheat each; ram recovery lets dry thrust supercruise past Mach 1.5
     thrust: (thr, V, h, M = 0) => {
       const st = SIM.st, sig = airRho(h) / 1.225, ram = 1 + 0.32 * Math.min(M, 1.7) - 0.25 * Math.max(0, M - 1.9);
-      return (232000 * Math.min(1, thr / 0.85) + 80000 * (st.ab || 0)) * Math.pow(sig, 0.72) * ram;
+      return (209000 * Math.min(1, thr / 0.85) + 103000 * (st.ab || 0)) * Math.pow(sig, 0.72) * ram;   // 2 × 23,500 lbf dry, 2 × 35,000 lbf wet
     },
-    machDrag: M => M < 0.85 ? 0 : M < 1.1 ? 0.024 * smooth(0.85, 1.1, M) : 0.031 * Math.max(0.66, 1.1 / M) + 0.05 * Math.max(0, M - 2.0) ** 2,
-    tvc: 5.6, spool: 0.5, startTime: 7,
+    // transonic drag rise, then falling wave drag: total drag ~0.015-0.02 supercruising at Mach 1.5-1.8; climbs steeply past Mach 2.2
+    machDrag: M => M < 0.85 ? 0 : M < 1.15 ? 0.0115 * smooth(0.85, 1.15, M) : 0.0115 * Math.pow(1.15 / M, 0.6) + 0.12 * Math.max(0, M - 2.2) ** 2,
+    tvc: 5.6, tvcDeg: 20, spool: 0.5, startTime: 7,   // 2-D nozzles vector ±20° in pitch, about 5.6 m behind the centre of gravity
     sets: [0, 20], setLabel: 'FLAPS', FCL: [0, 0.22], FCD: [0, 0.03], FCM: [0, -0.02], flapAS: [0, 0], flapRate: 15,
     gear: [
       { p: [-0.755, -2.05, 1.58], k: 1150000, c: 120000, brake: true, piece: 'gear' }, { p: [-0.755, -2.05, -1.58], k: 1150000, c: 120000, brake: true, piece: 'gear' },
@@ -5634,8 +5640,8 @@ const AC = {
       { p: [-7.0, 0.06, 4.4], piece: 'tail', kind: 'tail', n: 'Stabilator' }, { p: [-7.0, 0.06, -4.4], piece: 'tail', kind: 'tail', n: 'Stabilator' },
       { p: [-4.1, 3.15, 3.0], piece: 'tail', kind: 'tail', n: 'Fin' }, { p: [-4.1, 3.15, -3.0], piece: 'tail', kind: 'tail', n: 'Fin' }],
     collapse: 4, camDist: 30, airSpawn: 170, airThr: 0.7,
-    tips: 'Throttle past 85% lights the afterburners. Rotate at 145 kt, gear up, and it climbs like a rocket. Above 35,000 ft it supercruises past Mach 1.5 without reheat. Pull hard at low speed: thrust vectoring keeps the nose pointing where you want. BRAKE splays the rudders as a speedbrake.',
-    help: 'Two F119 engines with 2-D thrust-vectoring nozzles. The top 15% of the throttle is afterburner; without it the Raptor still supercruises at Mach 1.5+ high up. Fly-by-wire limits you to 9 G and 40° angle of attack, and the vectoring nozzles keep pitch control even when the wing is stalled. Missiles and bombs ride inside: the side-bay doors open when the seeker tracks a target and the main bay opens to drop bombs. Harriers treat you as a threat. Model: “F-22 Raptor - Fighter Jet - Free” by bohmerang (CC BY-NC-SA 4.0).',
+    tips: 'Throttle past 85% lights the afterburners. Rotate at 145 kt, gear up, and it climbs like a rocket. Above 35,000 ft it supercruises past Mach 1.5 without reheat. Pull the stick all the way back (past the soft stop) for the high-AoA mode: the vectoring nozzles hold the nose past 60°, enough for a J-turn. The blue box is the radar: when it locks, MSL fires an AIM-120 (Fox Three); close in, it fires an AIM-9X. REARM on the ground swaps air-to-air and air-to-ground loads.',
+    help: 'Two Pratt & Whitney F119s: 23,500 lbf dry and 35,000 lbf in reheat each, with 2-D nozzles that vector ±20° in pitch. The top 15% of the throttle is afterburner; without it the Raptor supercruises at Mach 1.5+ high up, and tops out near Mach 2.2. Fly-by-wire holds 9 G and 40° angle of attack; pulling through the sidestick soft stop opens the high-AoA mode (60°+), where the computer rolls about the flight path and the nozzles keep pitch control with the wing stalled. Weapons ride inside: six AIM-120 AMRAAMs on vertical ejectors in the main bay, two AIM-9X on trapeze rails in the side bays, and the M61A2 cannon (480 rounds, 100 a second). The APG-77 radar locks bandits within ±60° out to about 45 km. Speedbrake: ailerons up, flaperons down, rudders splayed. Model: “F-22 Raptor - Fighter Jet - Free” by bohmerang (CC BY-NC-SA 4.0).',
   },
   f35: {
     key: 'f35', name: 'F-35A Lightning II', sub: '5th-gen stealth multirole fighter', kind: 'fixed', build: buildF35, fbw: true, gLim: 9, retract: true, canopy: true, f35: true, abT: 0.85, stealth: 0.2, irK: 0.75,
@@ -6352,6 +6358,9 @@ function buildF22() {
     }
     { const b = AMB(); bombMesh(b, [2.2, -0.62, sg * 0.5]); const i = sg > 0 ? 1 : 0;
       parts.push(part(b, O, Y, Z, { piece: 'fuse', show: s => (s.st.mbdK || 0) > 0.3 && (!s.stores || s.stores.b[i] || CFG.unlimitedWpn) })); }
+    // the three AMRAAMs on this side of the main bay, seen when the doors open
+    for (const ri of (sg > 0 ? [3, 4, 5] : [0, 1, 2])) { const L = AC.f22.weapons.r[ri], m = AMB(); mslMesh(m, [L[0], -0.62, L[2]]);
+      parts.push(part(m, O, Y, Z, { piece: 'fuse', show: s => (s.st.mbdK || 0) > 0.3 && (!s.stores || !s.stores.r || s.stores.r[ri] || CFG.unlimitedWpn) })); }
     // main gear: swings inboard into its well; outer doors hang open while it is down
     const gb = b7bounds('gear' + sd, D), piv = [gb.c[0], gb.mx[1] - 0.08, sg * (Math.abs(gb.c[2]) - 0.32)];
     add('gear' + sd, 'gear', piv, [1, 0, 0], s => sg * 1.5 * (1 - s.gear), { show: s => s.gear > 0.02 });
@@ -6780,13 +6789,14 @@ function stepSim(dt) {
       // linear wing becomes lift loss, extra drag and rolling/yawing moments — so wing drop,
       // autorotation and spins come out of the aerodynamics instead of a script.
       const WS = wingStrips(a), Vs = Math.max(V, 12), pR = st.w[0], yRr = -st.w[1];
+      const lefK = a.lef ? smooth(0.08, 0.35, alpha) * (1 - smooth(0.85, 1.1, M)) : 0;   // leading-edge flaps droop with AoA (subsonic)
       if (!st.strip || st.strip.length !== WS.length) st.strip = WS.map(() => 0);
       let dCL = 0, dCl = 0, dCD = 0, dCn = 0, nSt = 0;
       for (let i = 0; i < WS.length; i++) {
         const w = WS[i], side = w.s, eta = w.eta;
         const qk = Math.max(0, 1 - side * yRr * w.y / Vs) ** 2 * (side < 0 ? lw : rw);    // local dynamic pressure
         const ai = alpha + side * pR * w.y / Vs - w.tw;                                      // local angle of attack
-        const ASi = AS + w.dAS;
+        const ASi = AS + w.dAS + lefK * 0.07;
         // flow separation isn't instant: it follows the target state over a few chord-lengths of travel
         if (!st.stripT) st.stripT = WS.map(() => 0);
         if (st.stripT[i] ? ai < ASi - 0.035 : ai > ASi) st.stripT[i] = st.stripT[i] ? 0 : 1;
@@ -6832,18 +6842,23 @@ function stepSim(dt) {
         // fly-by-wire: stick commands pitch rate and roll rate; an integrator trims out the
         // aircraft's natural pitching tendency so it holds attitude hands-off
         const blend = smooth(28, 55, V);
-        const gLim = (a.gLim || 7) * GRAV / Math.max(V, 30), aLim = clamp(((a.fbwAoA || a.AS * 0.85) - alpha) * 4, -1, 1);
-        const qc = clamp((c.pitch + (st.apcQ || 0)) * 0.45, -gLim * 0.5, Math.min(gLim, 0.45)) * (aLim < 0 ? 1 + aLim : 1) + Math.min(0, aLim) * 0.3;
+        // F-22 sidestick soft stop: pulling past ~92% opens the high-AoA, high-pitch-rate mode (thrust vectoring keeps control post-stall)
+        const hiA = a.fbwAoA2 && c.pitch > 0.92; st.hiAoA = hiA ? 1 : 0;
+        const aoaMax = hiA ? a.fbwAoA2 : (a.fbwAoA || a.AS * 0.85), blendLo = a.tvc ? smooth(12, 30, V) : blend;
+        const gLim = (a.gLim || 7) * GRAV / Math.max(V, 30), aLim = clamp((aoaMax - alpha) * 4, -1, 1);
+        const qc = clamp((c.pitch + (st.apcQ || 0)) * (hiA ? 0.9 : 0.45), -gLim * 0.5, Math.min(gLim, hiA ? 0.9 : 0.45)) * (aLim < 0 ? 1 + aLim : 1) + Math.min(0, aLim) * 0.3;
         const err = qc - q;
         st.fbwI = clamp(st.fbwI + err * 3.2 * dt * blend, -1.2, 1.2);
         // angle-of-attack protection: past the limit the computer pushes the nose down hard and unwinds its trim
-        const over = alpha - (a.fbwAoA || a.AS * 0.85);
+        const over = alpha - aoaMax;
         if (over > 0) st.fbwI = Math.min(st.fbwI, 0.15);
         const e = clamp(err * 4.5 + st.fbwI - Math.max(0, over) * 9 - (over > -0.05 ? Math.max(0, q) * 2.5 : 0), -1.3, 1.3);
-        pitchIn = lerp(pitchIn, e, blend);
-        const pc = c.roll * 2.2;
+        pitchIn = lerp(pitchIn, e, a.tvc ? blendLo : blend);   // with vectoring nozzles the computer keeps pitch authority down to very low speed
+        const pc = c.roll * 2.2 * (1 - 0.55 * smooth(0.45, 1.0, alpha));   // roll rate falls off at very high AoA
         rollIn = lerp(rollIn, clamp((pc - p) * 1.3, -1, 1), blend);
-        yawIn = lerp(yawIn, clamp(c.yaw + beta * 3 - yR * 0.6, -1, 1), blend);
+        // at high angle of attack the computer rolls about the velocity vector, not the nose (no sideslip build-up): r = p·tan(alpha)
+        const vvr = a.tvc ? p * Math.tan(clamp(alpha, 0, 1.2)) * smooth(0.25, 0.6, alpha) : 0;
+        yawIn = lerp(yawIn, clamp(c.yaw + beta * 3 + (vvr - yR) * 0.6 - (a.tvc ? 0 : 0), -1, 1), blend);
       } else st.fbwI = 0;
       st.elev = pitchIn;
       let Cm = a.CM0 * tk + (st.payload - 1) * -0.06 + FLAP(a.FCM) + (a.CMA * tk + 0.25 * (1 - tk)) * alpha + a.CMDE * pitchIn * tk + a.CMQ * (0.12 + 0.88 * tk) * q * a.c / (2 * Vd) - nSt * 0.08;
@@ -6856,7 +6871,12 @@ function stepSim(dt) {
       if (nSt > 0.05 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, clamp(nSt * 0.5, 0, 0.35) * clamp(V / 40, 0, 1));   // buffet
       const Cn = (a.CNB * tk - 0.03 * (1 - tk)) * beta + a.CNDR * yawIn * tk + a.CNR * (0.2 + 0.8 * tk) * yR * a.b / (2 * Vd) + a.CNDA * rollIn + (rw - lw) * 0.02;
       Mb = V3.add(Mb, [qbar * a.S * a.b * (Cl + ClSpin), -qbar * a.S * a.b * (Cn + CnSpin), qbar * a.S * a.c * Cm]);
-      if (a.tvc) { st.tv = st.engine ? clamp(pitchIn, -1, 1) : 0; Mb = V3.add(Mb, [0, 0, st.tv * Math.max(0, T) * 0.34 * a.tvc * tk]); }
+      if (a.tvc) {   // vectoring nozzles: ±tvcDeg of pitch; the deflected jet also pushes the tail down a little and costs some axial thrust
+        st.tv = st.engine ? clamp(pitchIn, -1, 1) : 0;
+        const dn = (a.tvcDeg || 20) * D2R * st.tv, Tp = Math.max(0, T) * tk;
+        Mb = V3.add(Mb, [0, 0, Math.sin(dn) * Tp * a.tvc]);
+        Fb = V3.add(Fb, [-(1 - Math.cos(dn)) * Tp, -Math.sin(dn) * Tp, 0]);
+      }
       st.spin = Math.abs(yR) > 0.9 && nSt > 0.4 ? 1 : 0;
       if (a.piston && T > 0) {
         // propeller: engine torque rolls left, P-factor and the corkscrew slipstream yaw left,
@@ -7712,7 +7732,40 @@ function rangeDraw() {
 
 // ---- stores, launching, flight ----
 const nukeLocs = a => !a.nuke ? [] : Array.isArray(a.nuke[0]) ? a.nuke : [a.nuke];
-function storesFor(a) { return a.weapons ? Object.assign({ m: a.weapons.m.map(() => true), b: a.weapons.b.map(() => true), side: 0 }, a.nuke ? { n: nukeLocs(a).map(() => true) } : {}) : null; }
+function storesFor(a, lo) {
+  if (!a.weapons) return null;
+  const S = Object.assign({ m: a.weapons.m.map(() => true), b: a.weapons.b.map(() => true), side: 0 }, a.nuke ? { n: nukeLocs(a).map(() => true) } : {});
+  if (a.weapons.r) {   // F-22 loadouts: air-to-air 6 × AIM-120 + 2 × AIM-9; air-to-ground 2 × GBU-32 + 2 × AIM-120 + 2 × AIM-9
+    S.lo = lo || 'aa';
+    S.r = a.weapons.r.map((_, i) => S.lo === 'aa' || i === 0 || i === 5);
+    S.b = S.lo === 'aa' ? a.weapons.b.map(() => false) : a.weapons.b.map(() => true);
+  }
+  return S;
+}
+// ---- APG-77 radar: locks the hostile aircraft nearest the nose within ±60° and ~45 km; lock takes about a second ----
+const RADAR = { tgt: null, t: 0, locked: false };
+function radarScan(p, dir, cone, range, list) {
+  let best = null, bs = 0;
+  for (const t of list) {
+    if (!t || t.dead || t.kind === 'flare') continue;
+    const d = V3.sub(t.p, p), L = V3.len(d);
+    if (L > range || L < 150) continue;
+    const off = Math.acos(clamp(V3.dot(V3.mul(d, 1 / L), dir), -1, 1));
+    if (off > cone) continue;
+    const sc = (1 - off / cone) * 2 + (1 - L / range);
+    if (sc > bs) { bs = sc; best = t; }
+  }
+  return best;
+}
+function radarTargets() { return aiTargets().filter(ai => ai.role === 'hostile' && !ai.dead); }
+function stepRadar(dt) {
+  const st = SIM.st, S = st.stores;
+  if (!S || !S.r || st.crashed || !(S.r.some(Boolean) || CFG.unlimitedWpn)) { RADAR.tgt = null; RADAR.locked = false; return; }
+  const f = Q.rot(st.q, [1, 0, 0]);
+  let t = RADAR.tgt && !RADAR.tgt.dead && radarScan(st.pos, f, 1.2, 50000, [RADAR.tgt]) ? RADAR.tgt : radarScan(st.pos, f, 1.05, 45000, radarTargets());
+  if (t !== RADAR.tgt) { RADAR.tgt = t; RADAR.t = 0; RADAR.locked = false; }
+  if (t) { RADAR.t += dt; if (RADAR.t > 1.0 && !RADAR.locked) { RADAR.locked = true; SIM.ev.push({ t: 'click' }); } }
+}
 // ---- infrared seeker: hot targets are seen farther, a tail-on engine is hottest; lock needs ~0.8 s of tracking ----
 const SEEK = { tgt: null, t: 0, locked: false, toneT: 0 };
 function tgtVel(t) { return t === PLAYER_TGT ? SIM.st.vel : t.v || [0, 0, 0]; }
@@ -7743,6 +7796,7 @@ function seekScan(p, dir, cone, list) {
 function seekerTargets() { return RANGE.targets.concat(aiTargets().filter(ai => ai.role === 'hostile'), navyTargets()); }
 function stepSeeker(dt) {
   const st = SIM.st;
+  stepRadar(dt);
   if (!st.stores || st.crashed || !(st.stores.m.some(Boolean) || CFG.unlimitedWpn)) { SEEK.tgt = null; SEEK.locked = false; return; }
   const f = Q.rot(st.q, [1, 0, 0]);
   // keep tracking the current target while it stays in the seeker's field; otherwise look for a new one
@@ -7757,6 +7811,12 @@ function lockTarget(st) { return SEEK.locked ? SEEK.tgt : null; }
 function fireStore(kind) {
   const st = SIM.st, a = st.acd, S = st.stores;
   if (!S || st.crashed) return;
+  if (kind === 'm' && S.r) {   // F-22 MSL button: AMRAAM on a radar lock beyond knife-fight range, Sidewinder close in or on a heat lock
+    const hasR = S.r.some(Boolean) || CFG.unlimitedWpn, hasM = S.m.some(Boolean) || CFG.unlimitedWpn;
+    const rd = RADAR.locked && RADAR.tgt ? V3.len(V3.sub(RADAR.tgt.p, st.pos)) : 0;
+    if (hasR && RADAR.locked && (rd > 3500 || !(SEEK.locked && hasM))) return fireAmraam();
+    if (!hasM && hasR) return fireAmraam();
+  }
   if (kind === 'n' && !S.n) return;
   const list = kind === 'm' ? S.m : kind === 'n' ? S.n : S.b, i = list.length === 2 && list[0] && list[1] ? (S.side ^= 1) : list.indexOf(true);
   if (i < 0) { ui.toast(kind === 'm' ? 'NO MISSILES' : kind === 'n' ? 'NO NUCLEAR WEAPON' : 'NO BOMBS', 'Land, stop, and REARM in SYS'); return; }
@@ -7775,10 +7835,30 @@ function fireStore(kind) {
   else if (kind === 'n' && !a.nukeGuided) ui.toast('☢ WEAPON RELEASED', 'Air burst at ' + (NUKE.BURST / 0.3048 / 1000).toFixed(1) + 'k ft — about ' + Math.round(NUKE.LETHAL / 1000 * 0.54) + ' nm lethal radius. Turn away and run');
   else ui.toast('BOMB AWAY', 'Follow the impact circle');
 }
+// AIM-120: punched out of the main bay by the vertical ejector (~8 m/s, 40 g), motor lights a third of a second later; active radar homing
+function fireAmraam() {
+  const st = SIM.st, a = st.acd, S = st.stores;
+  const i = S.r.indexOf(true);
+  if (i < 0 && !CFG.unlimitedWpn) { ui.toast('NO AMRAAMS', 'Land, stop, and REARM in SYS'); return; }
+  const k = i < 0 ? 0 : i; if (!CFG.unlimitedWpn) S.r[k] = false;
+  st.mbdT = 1.3;   // main bay doors snap open for the shot and close again
+  const loc = a.weapons.r[k], p = V3.add(st.pos, Q.rot(st.q, loc));
+  const tgt = RADAR.locked ? RADAR.tgt : null;
+  const pr = { kind: 'm', amraam: true, p, v: V3.add(st.vel, Q.rot(st.q, [0, -8.1, 0])), t: 0, q: st.q.slice(), target: tgt, trail: 0, drop: 0.35 };
+  SIM.proj.push(pr); wcamStart(pr); SIM.ev.push({ t: 'launch' });
+  ui.toast(tgt ? 'FOX THREE' : 'AMRAAM AWAY — NO LOCK', tgt ? `AIM-120 active radar · ${tgt.name || 'bandit'} · ${(V3.len(V3.sub(tgt.p, st.pos)) / 1000).toFixed(1)} km` : 'Wait for the radar box to lock (about a second on target)');
+}
 function rearm() {
   const st = SIM.st;
   if (!st.stores) return;
   if (!st.onGround || st.tas > 2) { ui.toast('REARM', 'Stop on the ground first'); return; }
+  if (st.stores.r) {   // F-22: tapping REARM on a full load swaps between the air-to-air and air-to-ground loads
+    const S = st.stores, full = S.r.every((v, i) => v === (S.lo === 'aa' || i === 0 || i === 5)) && S.m.every(Boolean) && S.b.every(v => v === (S.lo === 'ag'));
+    st.stores = storesFor(st.acd, full ? (S.lo === 'aa' ? 'ag' : 'aa') : S.lo);
+    SIM.ev.push({ t: 'clunk', k: 'gear' }); updWpn();
+    ui.toast(st.stores.lo === 'aa' ? 'AIR-TO-AIR LOAD' : 'AIR-TO-GROUND LOAD', st.stores.lo === 'aa' ? '6 × AIM-120 AMRAAM · 2 × AIM-9X · 480 rounds — REARM again to swap' : '2 × GBU-32 JDAM · 2 × AIM-120 · 2 × AIM-9X — REARM again to swap');
+    st.ammo = (gunFor(st.acd) || {}).ammo || st.ammo; return;
+  }
   st.stores.m = st.stores.m.map(() => true); st.stores.b = st.stores.b.map(() => true); if (st.stores.n) st.stores.n = st.stores.n.map(() => true);
   SIM.ev.push({ t: 'clunk', k: 'gear' }); ui.toast('REARMED', [st.stores.m.length && st.stores.m.length + ' missiles', st.stores.b.length + ' bombs', st.stores.n && st.stores.n.length + ' nuclear'].filter(Boolean).join(' · '));
 }
@@ -7807,26 +7887,32 @@ function stepWeapons(dt) {
     const sp = V3.len(pr.v), dir = sp > 1 ? V3.mul(pr.v, 1 / sp) : Q.rot(pr.q, [1, 0, 0]);
     if (pr.guided) stepGuidedNuke(pr, dt, dir);
     else if (pr.kind === 'm') {
-      const boostT = pr.sam ? 6.5 : 3.6;   // ship-launched SAMs burn longer and fly farther
-      if (pr.t > 0.3 && pr.t < boostT) pr.v = V3.add(pr.v, V3.mul(dir, (pr.sam ? 150 : 190) * dt));
+      const boostT = pr.sam ? 6.5 : pr.amraam ? 6.8 : 3.6;   // ship-launched SAMs and AMRAAMs burn longer and fly farther
+      const ign = pr.amraam ? 0.35 : 0.3;
+      if (pr.t > ign && pr.t < boostT) pr.v = V3.add(pr.v, V3.mul(dir, (pr.sam ? 150 : pr.amraam ? 165 : 190) * dt));
+      if (pr.amraam && pr.t < ign) { const st = SIM.st; pr.v = V3.add(pr.v, V3.mul(V3.sub(st.vel, pr.v), Math.min(1, dt * 1.5))); }   // falls clear in the jet's airflow before the motor lights
       // proportional navigation (N = 4) toward the target, up to ~35 g; the seeker looks ±55° off the nose
-      if (pr.t > (pr.sam ? 1.3 : 0.4) && pr.target) {
+      if (pr.t > (pr.sam ? 1.3 : pr.amraam ? 0.7 : 0.4) && (pr.target || pr.amraam)) {
+        if (!pr.target) { pr.target = radarScan(pr.p, dir, 0.5, 18000, radarTargets()); if (!pr.target) { /* flying out, its own radar searching */ } }
+      }
+      if (pr.t > (pr.sam ? 1.3 : pr.amraam ? 0.7 : 0.4) && pr.target) {
         const tp = V3.add(pr.target.p, [0, pr.target.hdg !== undefined || pr.target === PLAYER_TGT || pr.target.kind === 'flare' ? 0 : 1.2, 0]);
         const r = V3.sub(tp, pr.p), L = V3.len(r), rh = V3.mul(r, 1 / Math.max(L, 1));
         if (pr.target.dead || (!pr.sam && V3.dot(rh, dir) < Math.cos(0.96))) {   // ship SAMs are command-guided by the ship's radar   // lost it: look for the hottest thing ahead (flares are very hot)
-          const pool = pr.sam ? [PLAYER_TGT] : pr.enemy ? [PLAYER_TGT].concat(AI.flares) : seekerTargets().concat(AI.flares);
-          pr.target = seekScan(pr.p, dir, 0.5, pool);
+          if (pr.amraam) pr.target = radarScan(pr.p, dir, 0.6, 15000, radarTargets());   // active radar: flares don't fool it
+          else { const pool = pr.sam ? [PLAYER_TGT] : pr.enemy ? [PLAYER_TGT].concat(AI.flares) : seekerTargets().concat(AI.flares);
+          pr.target = seekScan(pr.p, dir, 0.5, pool); }
         } else {
           const vr = V3.sub(tgtVel(pr.target), pr.v), Om = V3.mul(V3.cross(r, vr), 1 / Math.max(L * L, 1)), vc = -V3.dot(vr, rh);
           let acc = V3.add(V3.mul(V3.cross(Om, dir), 4 * Math.max(vc, 150)), [0, GRAV * 0.25, 0]);
           acc = V3.sub(acc, V3.mul(dir, V3.dot(acc, dir)));
-          const al = V3.len(acc), amax = 35 * GRAV; if (al > amax) acc = V3.mul(acc, amax / al);
+          const al = V3.len(acc), amax = (pr.amraam ? 30 : 35) * GRAV; if (al > amax) acc = V3.mul(acc, amax / al);
           pr.v = V3.mul(V3.norm(V3.add(pr.v, V3.mul(acc, dt))), V3.len(pr.v));
         }
       }
       pr.v[1] -= GRAV * dt * (pr.t < 0.3 ? 1 : 0.25);
-      pr.v = V3.mul(pr.v, Math.exp(-dt * (pr.t < boostT ? 0.015 : pr.sam ? 0.045 : 0.08)));
-      if (pr.t > 0.3) { pr.trail -= dt; if (pr.trail <= 0) { pr.trail = 0.016; spawnFx('mtrail', V3.sub(pr.p, V3.mul(dir, 1.6)), V3.mul(dir, -8)); if (pr.t < boostT) spawnFx('flame', V3.sub(pr.p, V3.mul(dir, 1.5)), V3.add(pr.v, V3.mul(dir, -40))); } }
+      pr.v = V3.mul(pr.v, Math.exp(-dt * (pr.t < boostT ? 0.015 : pr.sam ? 0.045 : pr.amraam ? 0.028 * Math.exp(-Math.max(0, pr.p[1]) / 8500) : 0.08)));   // AMRAAM drag thins with altitude
+      if (pr.t > ign) { pr.trail -= dt; if (pr.trail <= 0) { pr.trail = 0.016; spawnFx('mtrail', V3.sub(pr.p, V3.mul(dir, 1.6)), V3.mul(dir, -8)); if (pr.t < boostT) spawnFx('flame', V3.sub(pr.p, V3.mul(dir, 1.5)), V3.add(pr.v, V3.mul(dir, -40))); } }
     } else {
       pr.v[1] -= GRAV * dt;
       pr.v = V3.sub(pr.v, V3.mul(pr.v, 0.00045 * sp * dt));
@@ -7836,12 +7922,19 @@ function stepWeapons(dt) {
     const nd = V3.norm(pr.v), ax = V3.cross([1, 0, 0], nd), s = V3.len(ax);
     pr.q = s < 1e-6 ? (nd[0] > 0 ? [0, 0, 0, 1] : Q.axis([0, 1, 0], Math.PI)) : Q.axis(V3.mul(ax, 1 / s), Math.atan2(s, nd[0]));
     const sfc = surfaceAt(pr.p[0], pr.p[2]);
-    let hit = pr.p[1] <= sfc.h + 0.3 || pr.t > (pr.guided ? 180 : 40);
+    let hit = pr.p[1] <= sfc.h + 0.3 || pr.t > (pr.guided ? 180 : pr.amraam ? 75 : 40);
     if (pr.guided) { const tp = gnukeAim(pr), hz = Math.hypot(tp[0] - pr.p[0], tp[2] - pr.p[2]); if (pr.t > 3 && (V3.len(V3.sub(tp, pr.p)) < 220 || (hz < 1500 && pr.p[1] - sfc.h <= NUKE.BURST))) hit = true; }
     else if (pr.kind === 'n' && pr.t > 1.5 && pr.p[1] - sfc.h <= NUKE.BURST) hit = true;   // proximity fuze: air burst
+    if (pr.kind === 'm' && !pr.target && pr.fuseT && pr.lastD != null && pr.lastD < 80) pr.target = pr.fuseT;   // the fuse keeps sensing a target the seeker has just flashed past
+    if (pr.kind === 'm' && pr.target) pr.fuseT = pr.target;
     if (pr.kind === 'm' && pr.target && pr.t > 0.5) {   // proximity fuze: bursts at the closest point of approach (or inside 4 m)
       const dd = V3.len(V3.sub(pr.p, V3.add(pr.target.p, [0, pr.target.hdg !== undefined || pr.target === PLAYER_TGT || pr.target.kind === 'flare' ? 0 : 1.2, 0])));
-      if (dd < 4 || (dd < (pr.sam ? 16 : 12) && pr.lastD != null && dd > pr.lastD)) hit = true; pr.lastD = dd; }
+      // the closest approach can fall between two steps when closing at Mach 4: check the segment, not just the sample
+      const tp = V3.add(pr.target.p, [0, pr.target.hdg !== undefined || pr.target === PLAYER_TGT || pr.target.kind === 'flare' ? 0 : 1.2, 0]);
+      const rr = V3.sub(tp, pr.p), vrel = V3.sub(tgtVel(pr.target), pr.v), vv = V3.dot(vrel, vrel);
+      const tca = vv > 1 ? clamp(-V3.dot(rr, vrel) / vv, -dt, 0) : 0, miss = V3.len(V3.add(rr, V3.mul(vrel, tca)));
+      const R = pr.amraam ? 14 : pr.sam ? 16 : 12;
+      if (dd < 4 || miss < R && pr.lastD != null && (dd > pr.lastD || tca > -dt && tca < 0 && miss < dd)) hit = true; pr.lastD = dd; }
     if (hit) { pr.done = true; detonate(pr, sfc); }
   }
   SIM.proj = SIM.proj.filter(p => !p.done);
@@ -12884,8 +12977,9 @@ function updWpn() {
   const S = SIM.st && SIM.st.stores;
   $('wpn').style.display = S && appState !== 'menu' ? 'flex' : 'none';
   if (!S) return;
-  $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : S.b.filter(Boolean).length;
+  $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.r ? S.r.filter(Boolean).length + '+' + S.m.filter(Boolean).length : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : S.b.filter(Boolean).length;
   $('bMsl').style.display = S.m.length ? '' : 'none';
+  $('bBomb').style.display = S.lo === 'aa' ? 'none' : '';
   $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) ? '' : 'none';
   $('bNuke').style.display = S.n ? '' : 'none'; if (S.n) $('bNukeV').textContent = CFG.unlimitedWpn ? '∞' : S.n.filter(Boolean).length;
 }
@@ -12901,7 +12995,14 @@ function drawWeaponCues(g, VP, W, H) {
   let drew = false;
   g.save(); g.lineWidth = 2; g.font = '700 12px Rajdhani, sans-serif'; g.textAlign = 'center';
   drew = drawGunSight(g, proj) || drew;
-  if (st.stores.m.some(Boolean) || CFG.unlimitedWpn) {
+  if (st.stores.m.some(Boolean) || (st.stores.r && st.stores.r.some(Boolean)) || CFG.unlimitedWpn) {
+    if (RADAR.tgt && st.stores.r) {   // APG-77: a box on the radar target (dashed while acquiring), range, and closure
+      const rt = RADAR.tgt, s = proj(rt.p); if (s) {
+        const km = (V3.len(V3.sub(rt.p, st.pos)) / 1000).toFixed(1), k = RADAR.locked ? 18 : 24 - 6 * clamp(RADAR.t, 0, 1);
+        g.strokeStyle = RADAR.locked ? '#5ad1ff' : 'rgba(90,209,255,0.7)'; g.lineWidth = 2; if (!RADAR.locked) g.setLineDash([4, 4]);
+        g.strokeRect(s[0] - k, s[1] - k, 2 * k, 2 * k); g.setLineDash([]);
+        g.fillStyle = '#5ad1ff'; g.fillText((RADAR.locked ? 'RDR LOCK ' : 'RDR ') + km + ' km' + (RADAR.locked && +km > 3.5 ? ' · AIM-120' : ''), s[0], s[1] + k + 15);
+        drew = true; } }
     const t = SEEK.tgt;
     if (t) { const s = proj(V3.add(t.p, [0, t.hdg !== undefined ? 0 : 1.5, 0])); if (s) {
       const km = (V3.len(V3.sub(t.p, st.pos)) / 1000).toFixed(1);
