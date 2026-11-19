@@ -437,6 +437,7 @@ function initGL(canvas) {
     uniform sampler2D uHM; uniform float uHMax; uniform float uHMin; uniform float uHL; uniform float uTSh; uniform float uLift;
     uniform vec3 uSunDir; uniform vec3 uSunCol; uniform vec3 uAmb; uniform vec3 uFogCol;
     uniform vec3 uZen; uniform vec3 uHor; uniform vec3 uGnd; uniform float uCamAlt;
+    uniform sampler2D uSky; uniform vec4 uAtm; uniform vec2 uSunXZ; uniform vec4 uAtmG;
     uniform vec3 uMoonDir; uniform vec3 uMoonCol;
     uniform float uUnlit; uniform float uAlpha; uniform vec3 uTint; uniform float uMode; uniform float uGrain; uniform float uTime;
     uniform vec2 uCamMod; uniform float uFogF; uniform vec2 uWave; uniform float uSea; uniform float uWet; uniform highp vec4 uNk; uniform float uC3, uCFog; uniform highp vec4 uC3P; uniform highp vec2 uC3W; uniform sampler2D uCWM, uCC, uCD; uniform vec2 uScr; uniform highp mat4 uWLM; uniform float uWSMOn; uniform sampler2D uWSM; uniform highp vec4 uCl[16]; uniform float uNCl; uniform highp vec4 uWk[6]; uniform vec4 uWkS[6]; uniform float uNWk;
@@ -498,7 +499,18 @@ function initGL(canvas) {
       }
       return sh;
     }
-    vec3 skyCol(vec3 d) { float t = clamp(d.y, 0.0, 1.0); vec3 c = mix(uHor, uZen, pow(t, 0.5)); return mix(c, uHor * 1.06 + uFogCol * 0.04, exp(-t * 14.0) * 0.55); }
+    // physically based sky (Hillaire 2020): radiance from the sky-view table, elevation packed toward the horizon, azimuth from the sun
+    vec3 atmSky(vec3 d) {
+      float el = asin(clamp(d.y, -1.0, 1.0)), l = el - uAtm.y;
+      float v = l >= 0.0 ? 0.5 + 0.5 * sqrt(l / (1.5708 - uAtm.y)) : 0.5 - 0.5 * sqrt(-l / (1.5708 + uAtm.y));
+      float ln = length(d.xz); float c = ln > 1e-4 ? dot(d.xz / ln, uSunXZ) : 1.0;
+      vec3 L = texture2D(uSky, vec2(acos(clamp(c, -1.0, 1.0)) * 0.31831, clamp(v, 0.004, 0.996))).rgb;
+      return mix(1.0 - exp(-L * uAtm.z), uAtmG.rgb, uAtmG.a);   // exposure; overcast greys it
+    }
+    vec3 skyCol(vec3 d) { float t = clamp(d.y, 0.0, 1.0); vec3 c = mix(uHor, uZen, pow(t, 0.5)); c = mix(c, uHor * 1.06 + uFogCol * 0.04, exp(-t * 14.0) * 0.55);
+      if (uAtm.x > 0.0) c = mix(c, atmSky(vec3(d.x, max(d.y, 0.0), d.z)), uAtm.x); return c; }
+    // the haze between the eye and a distant object: the sky colour just above the horizon in that direction (orange toward a low sun)
+    vec3 hazeCol(vec3 rel) { vec3 h = normalize(vec3(rel.x, max(rel.y, 0.0) * 0.25 + 0.02 * length(rel.xz), rel.z)); return atmSky(h); }
     // sun shadow cast by the island itself: march toward the sun across the height map
     float sunVis(vec3 n) {
       if (uTSh < 0.5 || uSunDir.y < 0.0 || dot(n, uSunDir) <= 0.0) return 1.0;
@@ -703,20 +715,21 @@ function initGL(canvas) {
         float alt = max(uCamAlt, 0.0), dip = sqrt(2.0 * alt / 6.371e6), space = smoothstep(9000.0, 45000.0, alt);
         vec3 d = normalize(vec3(d0.x, d0.y + dip, d0.z));
         col = skyCol(d);
-        col = mix(col, vec3(0.004, 0.008, 0.03), space * smoothstep(0.0, 0.35, d.y));   // deep blue-black overhead
-        col += vec3(0.25, 0.5, 1.0) * space * exp(-abs(d.y) * 60.0) * 0.55 * max(0.2, uSunCol.r);   // the thin glowing limb of the atmosphere
+        col = mix(col, vec3(0.004, 0.008, 0.03), space * smoothstep(0.0, 0.35, d.y) * (1.0 - uAtm.x));   // deep blue-black overhead
+        if (uAtm.x > 0.0) col = mix(col, atmSky(d0), uAtm.x);   // the table already knows the earth curves away below a high camera
+        col += vec3(0.25, 0.5, 1.0) * space * exp(-abs(d.y) * 60.0) * 0.55 * max(0.2, uSunCol.r) * (1.0 - uAtm.x);   // the thin glowing limb of the atmosphere
         // sunrise / sunset: warm light along the horizon under the sun, pink twilight belt and the earth's shadow opposite
-        float se = uSunDir.y, low = smoothstep(0.35, 0.02, se) * smoothstep(-0.22, -0.02, se);
+        float se = uSunDir.y, low = smoothstep(0.35, 0.02, se) * smoothstep(-0.22, -0.02, se) * (1.0 - uAtm.x);
         vec2 dh = normalize(d.xz + 1e-5), sh = normalize(uSunDir.xz + 1e-5);
         float toward = 0.5 + 0.5 * dot(dh, sh), hb = exp(-max(d.y, 0.0) * 7.0);
         vec3 warm = mix(vec3(0.98, 0.62, 0.32), vec3(1.0, 0.36, 0.12), smoothstep(0.12, -0.04, se));
         col = mix(col, warm * (0.6 + 0.6 * max(uSunCol.r, 0.3)), low * hb * pow(toward, 2.5) * 0.85 * (1.0 - space));
         col = mix(col, vec3(0.86, 0.52, 0.6) * 0.75, low * exp(-max(d.y, 0.0) * 4.0) * 0.35 * (1.0 - toward) * (1.0 - space));
-        float tw = smoothstep(0.04, -0.03, se) * smoothstep(-0.2, -0.05, se);
+        float tw = smoothstep(0.04, -0.03, se) * smoothstep(-0.2, -0.05, se) * (1.0 - uAtm.x);
         col = mix(col, vec3(0.78, 0.5, 0.6) * 0.55, tw * (1.0 - toward) * smoothstep(0.02, 0.1, d.y) * exp(-d.y * 6.0) * 0.8);   // belt of Venus
         col = mix(col, vec3(0.16, 0.2, 0.34) * 0.6, tw * (1.0 - toward) * exp(-max(d.y, 0.0) * 22.0) * 0.7);                   // earth's shadow
         float sd = max(dot(d0, uSunDir), 0.0);
-        col += uSunCol * (0.1 * pow(sd, 4.0) + 0.28 * pow(sd, 28.0) + 0.6 * pow(sd, 400.0));   // sky glow around the sun
+        col += uSunCol * ((0.1 * pow(sd, 4.0) + 0.28 * pow(sd, 28.0)) * (1.0 - 0.8 * uAtm.x) + 0.6 * pow(sd, 400.0));   // sky glow around the sun (the atmosphere table already holds the Mie glow)
         if (d.y < 0.0) col = mix(col, mix(uFogCol, vec3(0.05, 0.09, 0.16), space * 0.7), smoothstep(0.0, -0.08, d.y));
         // high cirrus streaks
         vec2 cu = d.xz / (d.y + 0.12) * 1.4 + vec2(uTime * 0.004, 0.0);
@@ -866,8 +879,9 @@ function initGL(canvas) {
         float fd = length(vRel * 0.001) * uFogF;
         col += (h21(gl_FragCoord.xy) - 0.5) * uGrain;
         // clear water: see the reef and sand underneath close in and looking down; opaque at grazing angles
-        { float aer = 1.0 - exp(-0.7 * fd); col = mix(col, uHor * 0.92, aer * 0.32); }   // the blue of distance, as on land
-        gl_FragColor = vec4(mix(col, uFogCol, 1.0 - exp(-fd * fd)), uAlpha); return;   // the bottom is drawn by this shader: the surface is opaque
+        vec3 hzS = uAtm.x > 0.0 ? mix(uHor * 0.92, hazeCol(vRel), uAtm.x) : uHor * 0.92;
+        { float aer = 1.0 - exp(-0.7 * fd); col = mix(col, hzS, aer * 0.32); }   // the blue of distance, as on land
+        gl_FragColor = vec4(mix(col, mix(uFogCol, hzS, uAtm.x * 0.85), 1.0 - exp(-fd * fd)), uAlpha); return;   // the bottom is drawn by this shader: the surface is opaque
       } else {
         vec3 n = normalize(vNor);
         vec3 c = vCol * uTint;
@@ -958,8 +972,10 @@ function initGL(canvas) {
       // aerial perspective: with distance, colours lose saturation and take on the blue of the air before the fog closes in
       { float aer = 1.0 - exp(-0.7 * sqrt(max(-log(1.0 - min(vFog, 0.999)), 0.0)));   // (vFog = 1 - exp(-(dist * fog density)^2))
         col = mix(col, mix(vec3(dot(col, vec3(0.3, 0.59, 0.11))), col, 0.62), aer);
-        col = mix(col, uHor * 0.92, aer * 0.38); }
+        vec3 hz = uAtm.x > 0.0 ? mix(uHor * 0.92, hazeCol(vRel), uAtm.x) : uHor * 0.92;
+        col = mix(col, hz, aer * 0.38); }
       vec3 fogC = uFogCol + uSunCol * 0.2 * pow(max(dot(normalize(vRel), uSunDir), 0.0), 6.0);   // haze glows toward the sun
+      if (uAtm.x > 0.0) fogC = mix(fogC, hazeCol(vRel), uAtm.x * 0.85);
       col = mix(col, fogC, vFog);
       if (uCFog > 0.5) {   // drawn after the clouds were laid in: if this fragment is behind the cloud the ray entered, the cloud covers it
         vec2 suv = gl_FragCoord.xy / uScr; vec4 cc = texture2D(uCC, suv);
@@ -978,7 +994,7 @@ function initGL(canvas) {
   R.pr = pr;
   R.a = { pos: gl.getAttribLocation(pr, 'aPos'), nor: gl.getAttribLocation(pr, 'aNor'), col: gl.getAttribLocation(pr, 'aCol'), mat: gl.getAttribLocation(pr, 'aMat') };
   R.u = {};
-  for (const n of ['uC3', 'uCFog', 'uC3P', 'uC3W', 'uCWM', 'uCC', 'uCD', 'uScr', 'uNk', 'uWet', 'uWLM', 'uWSMOn', 'uWSM', 'uCl', 'uNCl', 'uSea', 'uWk', 'uWkS', 'uNWk', 'uM', 'uVP', 'uCam', 'uFogDen', 'uSunDir', 'uSunCol', 'uAmb', 'uFogCol', 'uUnlit', 'uAlpha', 'uTint', 'uMode', 'uGrain', 'uTime', 'uZen', 'uHor', 'uGnd', 'uMoonDir', 'uMoonCol', 'uCamMod', 'uPLp', 'uPLc', 'uNPL', 'uSpotP', 'uSpotD', 'uSpotC', 'uFogF', 'uWave', 'uHM', 'uHMax', 'uHMin', 'uHL', 'uTSh', 'uLift', 'uApP', 'uApS', 'uTex', 'uUseTex', 'uNM', 'uRM', 'uMaps', 'uSM', 'uSMOn', 'uLM', 'uCamAlt']) R.u[n] = gl.getUniformLocation(pr, n);
+  for (const n of ['uSky', 'uAtm', 'uSunXZ', 'uAtmG', 'uC3', 'uCFog', 'uC3P', 'uC3W', 'uCWM', 'uCC', 'uCD', 'uScr', 'uNk', 'uWet', 'uWLM', 'uWSMOn', 'uWSM', 'uCl', 'uNCl', 'uSea', 'uWk', 'uWkS', 'uNWk', 'uM', 'uVP', 'uCam', 'uFogDen', 'uSunDir', 'uSunCol', 'uAmb', 'uFogCol', 'uUnlit', 'uAlpha', 'uTint', 'uMode', 'uGrain', 'uTime', 'uZen', 'uHor', 'uGnd', 'uMoonDir', 'uMoonCol', 'uCamMod', 'uPLp', 'uPLc', 'uNPL', 'uSpotP', 'uSpotD', 'uSpotC', 'uFogF', 'uWave', 'uHM', 'uHMax', 'uHMin', 'uHL', 'uTSh', 'uLift', 'uApP', 'uApS', 'uTex', 'uUseTex', 'uNM', 'uRM', 'uMaps', 'uSM', 'uSMOn', 'uLM', 'uCamAlt']) R.u[n] = gl.getUniformLocation(pr, n);
   for (const k in R.a) gl.enableVertexAttribArray(R.a[k]);
   gl.uniform1i(R.u.uTex, 4); gl.uniform1i(R.u.uNM, 5); gl.uniform1i(R.u.uRM, 6); gl.uniform1i(R.u.uSM, 7); gl.uniform1i(R.u.uWSM, 2); gl.uniform1i(R.u.uCWM, 8); gl.uniform1i(R.u.uCC, 10); gl.uniform1i(R.u.uCD, 11); gl.vertexAttrib4f(5, 1, 0, 0, 1);
   gl.enable(gl.DEPTH_TEST);
@@ -1173,6 +1189,12 @@ function setFrame(vp, cam, env, lights) {
   gl.uniform3fv(u.uMoonDir, env.moonDir); gl.uniform3fv(u.uMoonCol, env.moonCol);
   gl.uniform3fv(u.uAmb, env.amb); gl.uniform3fv(u.uFogCol, env.fog);
   gl.uniform3fv(u.uZen, env.zen); gl.uniform3fv(u.uHor, env.hor); gl.uniform3fv(u.uGnd, env.gnd); gl.uniform1f(u.uCamAlt, env.camAlt || 0);
+  if (typeof ATM !== 'undefined' && ATM.on) {
+    gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, ATM.tex); gl.activeTexture(gl.TEXTURE0); gl.uniform1i(u.uSky, 12);
+    const wk = env.wx === 'rain' ? 1 : env.wx === 'overcast' ? 0.85 : 0;
+    gl.uniform4f(u.uAtm, (1 - ATM.nightK) * (env.atmK == null ? 1 : env.atmK), ATM.horEl, env.atmExpo || ATM.expo, 0); gl.uniform2f(u.uSunXZ, ATM.sunXZ[0], ATM.sunXZ[1]);
+    gl.uniform4f(u.uAtmG, (env.zen[0] + env.hor[0]) / 2, (env.zen[1] + env.hor[1]) / 2, (env.zen[2] + env.hor[2]) / 2, 0.8 * wk);
+  } else gl.uniform4f(u.uAtm, 0, 0, 1, 0);
   gl.uniform1f(u.uGrain, env.grain); gl.uniform1f(u.uTime, window.__tFreeze != null ? window.__tFreeze : (performance.now() / 1000) % 1000);
   { const cl = env.clouds || [], n = Math.min(16, cl.length), A = new Float32Array(64); for (let i = 0; i < n; i++) A.set(cl[i], i * 4); gl.uniform4fv(u.uCl, A); gl.uniform1f(u.uNCl, n); }
   gl.uniform1f(u.uWSMOn, WSM.on ? 1 : 0); if (WSM.on) { gl.uniformMatrix4fv(u.uWLM, false, WSM.L); gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, WSM.tex); gl.activeTexture(gl.TEXTURE0); }
@@ -2898,6 +2920,13 @@ function makeEnv(key) {
 function applyWeather(e) {
   const wx = (typeof CFG !== 'undefined' && CFG.weather) || 'scattered', k = wx === 'rain' ? 1 : wx === 'overcast' ? 0.85 : 0;
   e.wx = wx; e.wet = wx === 'rain' ? 1 : 0;
+  // physically based sky: zenith, horizon, haze, skylight and sunlight from the atmosphere model (night keeps the painted palette)
+  if (typeof ATM !== 'undefined' && ATM.on) {
+    atmSetWeather(wx);
+    const c = atmColors(e.sunEl), w = 1 - smooth(-3, -11, e.sunEl);
+    for (const kk of ['zen', 'hor', 'fog', 'amb', 'sunCol']) e[kk] = V3.lerp(e[kk], c[kk], w);
+    e.atmExpo = c.expo;
+  }
   if (!k) return e;
   const day = clamp((e.sunEl + 4) / 20, 0, 1), grey = V3.mul([0.62, 0.65, 0.7], 0.25 + 0.75 * day);
   e.sunCol = V3.mul(e.sunCol, 1 - 0.7 * k);
@@ -3006,6 +3035,199 @@ function buildCity() {
     for (let t = -1; t <= 1; t += 0.25) for (const sgn of [-1, 1]) { const a = a2.len / 2 * t, c = sgn * (a2.wid / 2 + 1.5); LIGHTS.push({ p: [a2.x + fx * a + rx * c, a2.elev + 1, a2.z + fz * a + rz * c], c: [0.35, 0.3, 0.16] }); }
   }
   return { mesh: mb.build(), win: win.build(), lit: lit.build(), lamps: lamps.build() };
+}
+
+// ===================== Physically based sky and atmosphere =====================
+// After Hillaire, "A Scalable and Production Ready Sky and Atmosphere Rendering Technique" (EGSR 2020, Epic Games):
+// Rayleigh scattering by air molecules, Mie scattering and absorption by haze, ozone absorption, single scattering
+// plus the paper's multiple-scattering approximation. Three small lookup tables are computed on the CPU:
+//   transmittance T(h, mu)        - how much sunlight survives the path to a point (256 x 64, once per weather)
+//   multiple scattering Psi(h,mus) - light bounced many times in the air (32 x 32, once per weather)
+//   sky view L(elev, az)           - the sky seen from the camera's altitude (96 x 64, refreshed in slices as the sun
+//                                    moves or the aircraft climbs), uploaded as a half-float texture for the shaders.
+// The same model gives the colour of direct sunlight, the ambient skylight and the haze, so everything matches.
+const ATM = {
+  on: false, Rg: 6360, Rt: 6460, mieK: 1.7,            // km; Miami's humid air carries more haze than the standard atmosphere
+  TW: 256, TH: 64, MW: 20, MH: 20, SW: 96, SH: 64,
+  T: null, MS: null, SV: null, SVb: null, tex: null, row: 0, pend: null,
+  expo: 12, kSun: 1, kAmb: 1, h: -1, el: -99, wx: null, horEl: 0, sunXZ: [1, 0], nightK: 0, greyK: 0, grey: [0.6, 0.62, 0.66],
+};
+const ATM_SR = [5.802e-3, 13.558e-3, 33.1e-3], ATM_OZ = [0.650e-3, 1.881e-3, 0.085e-3];   // per km
+function atmMedium(h) {   // scattering (rayleigh, mie) and extinction at altitude h km
+  const r = Math.exp(-h / 8), m = Math.exp(-h / 1.2), o = Math.max(0, 1 - Math.abs(h - 25) / 15), k = ATM.mieK;
+  const ms = 3.996e-3 * m * k, ma = 4.4e-3 * m * k;
+  return { sr0: ATM_SR[0] * r, sr1: ATM_SR[1] * r, sr2: ATM_SR[2] * r, ms,
+    e0: ATM_SR[0] * r + ms + ma + ATM_OZ[0] * o, e1: ATM_SR[1] * r + ms + ma + ATM_OZ[1] * o, e2: ATM_SR[2] * r + ms + ma + ATM_OZ[2] * o };
+}
+// distance along a ray from radius r with zenith cosine mu to the top of the atmosphere / to the ground (-1 if missed)
+function atmTop(r, mu) { const d = r * r * (mu * mu - 1) + ATM.Rt * ATM.Rt; return -r * mu + Math.sqrt(Math.max(0, d)); }
+function atmGnd(r, mu) { const d = r * r * (mu * mu - 1) + ATM.Rg * ATM.Rg; return d < 0 || mu > 0 ? -1 : -r * mu - Math.sqrt(d); }
+// transmittance table, mu packed denser near the horizon
+const atmMuX = x => { const t = x * 2 - 1; return Math.sign(t) * t * t; }, atmXMu = mu => 0.5 + 0.5 * Math.sign(mu) * Math.sqrt(Math.abs(mu));
+const atmHY = y => y * y * (ATM.Rt - ATM.Rg), atmYH = h => Math.sqrt(clamp(h / (ATM.Rt - ATM.Rg), 0, 1));
+function atmBuildT() {
+  const { TW, TH } = ATM, T = new Float32Array(TW * TH * 3);
+  for (let j = 0; j < TH; j++) for (let i = 0; i < TW; i++) {
+    const h = atmHY(j / (TH - 1)), mu = atmMuX(i / (TW - 1)), r = ATM.Rg + h, o = (j * TW + i) * 3;
+    if (atmGnd(r, mu) > 0) { T[o] = T[o + 1] = T[o + 2] = 0; continue; }   // the earth is in the way
+    const L = atmTop(r, mu), N = 40, ds = L / N; let a0 = 0, a1 = 0, a2 = 0;
+    for (let k = 0; k < N; k++) { const t = (k + 0.5) * ds, hh = Math.sqrt(r * r + t * t + 2 * r * mu * t) - ATM.Rg, m = atmMedium(hh); a0 += m.e0 * ds; a1 += m.e1 * ds; a2 += m.e2 * ds; }
+    T[o] = Math.exp(-a0); T[o + 1] = Math.exp(-a1); T[o + 2] = Math.exp(-a2);
+  }
+  ATM.T = T;
+}
+function atmT(h, mu, out) {   // bilinear lookup
+  const { TW, TH, T } = ATM, x = atmXMu(clamp(mu, -1, 1)) * (TW - 1), y = atmYH(h) * (TH - 1);
+  const i = Math.min(TW - 2, x | 0), j = Math.min(TH - 2, y | 0), fx = x - i, fy = y - j;
+  for (let c = 0; c < 3; c++) {
+    const a = T[(j * TW + i) * 3 + c], b = T[(j * TW + i + 1) * 3 + c], d = T[((j + 1) * TW + i) * 3 + c], e = T[((j + 1) * TW + i + 1) * 3 + c];
+    out[c] = (a + (b - a) * fx) * (1 - fy) + (d + (e - d) * fx) * fy;
+  }
+  return out;
+}
+// multiple scattering (Hillaire section 5.5): second-order light from all directions, then the infinite series 1/(1-f)
+function atmBuildMS() {
+  const { MW, MH } = ATM, MS = new Float32Array(MW * MH * 3), tmp = [0, 0, 0], ND = 64, albedo = 0.3;
+  const dirs = []; for (let k = 0; k < ND; k++) { const z = 1 - 2 * (k + 0.5) / ND, a = k * 2.399963; const s = Math.sqrt(1 - z * z); dirs.push([s * Math.cos(a), z, s * Math.sin(a)]); }   // Fibonacci sphere
+  for (let j = 0; j < MH; j++) for (let i = 0; i < MW; i++) {
+    const h = Math.max(0.01, atmHY(j / (MH - 1))), mus = i / (MW - 1) * 2 - 1, r = ATM.Rg + h;
+    const sun = [Math.sqrt(1 - mus * mus), mus, 0];
+    let L0 = 0, L1 = 0, L2 = 0, f0 = 0, f1 = 0, f2 = 0;
+    for (const d of dirs) {
+      const mu = d[1], g = atmGnd(r, mu), dist = g > 0 ? g : atmTop(r, mu), N = 16, ds = dist / N;
+      let t0 = 1, t1 = 1, t2 = 1;
+      for (let k = 0; k < N; k++) {
+        const t = (k + 0.5) * ds, px = d[0] * t, py = r + d[1] * t, pz = d[2] * t, pr = Math.hypot(px, py, pz), hh = pr - ATM.Rg, m = atmMedium(hh);
+        const smu = (px * sun[0] + py * sun[1] + pz * sun[2]) / pr; atmT(hh, smu, tmp);
+        const s0 = m.sr0 + m.ms, s1 = m.sr1 + m.ms, s2 = m.sr2 + m.ms, x0 = Math.exp(-m.e0 * ds), x1 = Math.exp(-m.e1 * ds), x2 = Math.exp(-m.e2 * ds);
+        const i0 = (1 - x0) / m.e0, i1 = (1 - x1) / m.e1, i2 = (1 - x2) / m.e2;   // energy-conserving step integral
+        L0 += t0 * s0 * tmp[0] * i0 / (4 * Math.PI); L1 += t1 * s1 * tmp[1] * i1 / (4 * Math.PI); L2 += t2 * s2 * tmp[2] * i2 / (4 * Math.PI);
+        f0 += t0 * s0 * i0; f1 += t1 * s1 * i1; f2 += t2 * s2 * i2;
+        t0 *= x0; t1 *= x1; t2 *= x2;
+      }
+      if (g > 0) {   // light bounced off the ground
+        const px = d[0] * g, py = r + d[1] * g, pz = d[2] * g, pr = Math.hypot(px, py, pz), smu = (px * sun[0] + py * sun[1] + pz * sun[2]) / pr;
+        atmT(0, smu, tmp); const k = Math.max(0, smu) * albedo / Math.PI; L0 += t0 * tmp[0] * k; L1 += t1 * tmp[1] * k; L2 += t2 * tmp[2] * k;
+      }
+    }
+    const o = (j * MW + i) * 3, w = 1 / ND;   // uniform phase: the average over the sphere
+    MS[o] = L0 * w / (1 - f0 * w); MS[o + 1] = L1 * w / (1 - f1 * w); MS[o + 2] = L2 * w / (1 - f2 * w);
+  }
+  ATM.MS = MS;
+}
+function atmMSL(h, mus, out) {
+  const { MW, MH, MS } = ATM, x = clamp((mus + 1) / 2, 0, 1) * (MW - 1), y = atmYH(h) * (MH - 1);
+  const i = Math.min(MW - 2, x | 0), j = Math.min(MH - 2, y | 0), fx = x - i, fy = y - j;
+  for (let c = 0; c < 3; c++) {
+    const a = MS[(j * MW + i) * 3 + c], b = MS[(j * MW + i + 1) * 3 + c], d = MS[((j + 1) * MW + i) * 3 + c], e = MS[((j + 1) * MW + i + 1) * 3 + c];
+    out[c] = (a + (b - a) * fx) * (1 - fy) + (d + (e - d) * fx) * fy;
+  }
+  return out;
+}
+const atmPR = c => 3 / (16 * Math.PI) * (1 + c * c);
+const atmPM = c => { const g = 0.8, k = 3 / (8 * Math.PI) * (1 - g * g) / (2 + g * g); return k * (1 + c * c) / Math.pow(1 + g * g - 2 * g * c, 1.5); };   // Cornette-Shanks
+// radiance (sun illuminance = 1) along a view ray from altitude hc km; dir is [x, y(up), z]; sun is [x, y, z]
+function atmRay(hc, d, sun, out, N = 24) {
+  const r = ATM.Rg + Math.max(0.002, hc), mu = d[1], g = atmGnd(r, mu), dist = g > 0 ? g : atmTop(r, mu);
+  const cth = d[0] * sun[0] + d[1] * sun[1] + d[2] * sun[2], pr0 = atmPR(cth), pm0 = atmPM(cth), tmp = [0, 0, 0], ms = [0, 0, 0];
+  let L0 = 0, L1 = 0, L2 = 0, t0 = 1, t1 = 1, t2 = 1, tp = 0;
+  for (let k = 0; k < N; k++) {
+    const tn = dist * Math.pow((k + 1) / N, 1.6), ds = tn - tp, t = tp + ds * 0.5; tp = tn;   // finer steps close to the eye
+    const px = d[0] * t, py = r + d[1] * t, pz = d[2] * t, pr = Math.hypot(px, py, pz), hh = pr - ATM.Rg, m = atmMedium(hh);
+    const smu = (px * sun[0] + py * sun[1] + pz * sun[2]) / pr; atmT(hh, smu, tmp); atmMSL(hh, smu, ms);
+    const x0 = Math.exp(-m.e0 * ds), x1 = Math.exp(-m.e1 * ds), x2 = Math.exp(-m.e2 * ds);
+    const S0 = (m.sr0 * pr0 + m.ms * pm0) * tmp[0] + (m.sr0 + m.ms) * ms[0];
+    const S1 = (m.sr1 * pr0 + m.ms * pm0) * tmp[1] + (m.sr1 + m.ms) * ms[1];
+    const S2 = (m.sr2 * pr0 + m.ms * pm0) * tmp[2] + (m.sr2 + m.ms) * ms[2];
+    L0 += t0 * S0 * (1 - x0) / m.e0; L1 += t1 * S1 * (1 - x1) / m.e1; L2 += t2 * S2 * (1 - x2) / m.e2;
+    t0 *= x0; t1 *= x1; t2 *= x2;
+  }
+  out[0] = L0; out[1] = L1; out[2] = L2; return out;
+}
+// sky-view table parameterisation (Hillaire 5.3): elevation packed toward the horizon, azimuth measured from the sun
+const atmHorEl = hc => -Math.acos(clamp(ATM.Rg / (ATM.Rg + Math.max(0.002, hc)), -1, 1));
+function atmSVDir(u, v, horEl) {
+  let el;
+  if (v >= 0.5) { const s = (v - 0.5) * 2; el = horEl + s * s * (Math.PI / 2 - horEl); }
+  else { const s = (0.5 - v) * 2; el = horEl - s * s * (Math.PI / 2 + horEl); }
+  const az = u * Math.PI, ce = Math.cos(el);
+  return [ce * Math.cos(az), Math.sin(el), ce * Math.sin(az)];
+}
+function atmSVRows(hc, sun, from, to) {   // fills rows [from, to) of the back buffer
+  const { SW, SH } = ATM, B = ATM.SVb, horEl = atmHorEl(hc), L = [0, 0, 0];
+  for (let j = from; j < to; j++) for (let i = 0; i < SW; i++) {
+    atmRay(hc, atmSVDir(i / (SW - 1), j / (SH - 1), horEl), sun, L);
+    const o = (j * SW + i) * 4; B[o] = L[0]; B[o + 1] = L[1]; B[o + 2] = L[2]; B[o + 3] = 1;
+  }
+}
+const atmTM = (L, e) => [1 - Math.exp(-L[0] * e), 1 - Math.exp(-L[1] * e), 1 - Math.exp(-L[2] * e)];
+const atmSunVec = el => { const r = el * D2R; return [Math.cos(r), Math.sin(r), 0]; };
+// colours for the rest of the renderer: zenith, horizon, haze, ambient skylight and direct sun, at altitude hc
+function atmColors(el, hc = 0.3) {
+  const sun = atmSunVec(el), L = [0, 0, 0], zen = atmTM(atmRay(hc, [0, 1, 0], sun, L), ATM.expo);
+  const hor = [0, 0, 0], fog = [0, 0, 0], irr = [0, 0, 0];
+  for (let k = 0; k < 8; k++) {
+    const az = k / 8 * Math.PI * 2, c = Math.cos(az), s = Math.sin(az);
+    const a = atmTM(atmRay(hc, V3.norm([c, 0.05, s]), sun, L), ATM.expo); for (let q = 0; q < 3; q++) hor[q] += a[q] / 8;
+    const b = atmTM(atmRay(hc, V3.norm([c, 0.012, s]), sun, L), ATM.expo); for (let q = 0; q < 3; q++) fog[q] += b[q] / 8;
+    for (const e of [0.15, 0.45, 0.85]) { const d = V3.norm([c * Math.cos(e * 1.5), Math.sin(e * 1.5), s * Math.cos(e * 1.5)]); atmRay(hc, d, sun, L, 12); for (let q = 0; q < 3; q++) irr[q] += L[q] * d[1] / 24; }
+  }
+  const T = atmT(hc, sun[1], [0, 0, 0]), lum = c => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+  // eye adaptation: as the light fades toward sunset the eye opens up (partly), so scenes stay readable
+  const sunRaw = T.map(v => v * ATM.kSun), key = lum(sunRaw) * Math.max(0.05, Math.sin(Math.max(el, 0) * D2R)) + lum(irr) * ATM.kAmb * 0.5;
+  const A = ATM.Kn ? clamp(Math.pow(ATM.Kn / Math.max(key, 1e-5), 0.33), 1, 3.2) : 1, eA = ATM.expo * A;
+  // skylight as fill: the luminance of the real sky irradiance, but only a quarter of its strong blue (ground bounce and the eye's white balance)
+  const al = lum(irr) * ATM.kAmb, amb = irr.map(v => (al + (v * ATM.kAmb - al) * 0.25) * A);
+  if (el !== 58 || ATM.Kn) { const z = atmTM(atmRay(hc, [0, 1, 0], sun, L), eA); zen[0] = z[0]; zen[1] = z[1]; zen[2] = z[2];
+    for (let q = 0; q < 3; q++) { hor[q] = 1 - Math.pow(1 - hor[q], A); fog[q] = 1 - Math.pow(1 - fog[q], A); } }   // same exposure on the tone-mapped colours
+  return { zen, hor, fog, amb: amb.map(v => Math.min(1.1, v)), sunCol: sunRaw.map(v => Math.min(1.08, v * A)), expo: eA, key, A };
+}
+function atmInit() {
+  if (!R.gl2) return;   // needs half-float textures (WebGL 2)
+  try {
+    const t0 = performance.now();
+    atmBuildT(); atmBuildMS();
+    // calibrate once against the hand-tuned noon look, so the brightness of everything else is unchanged
+    const sun = atmSunVec(58), L = atmRay(0.3, [0, 1, 0], sun, [0, 0, 0]);
+    ATM.expo = -Math.log(1 - 0.6) / L[2];
+    const T = atmT(0.3, sun[1], [0, 0, 0]); ATM.kSun = 1 / Math.max(T[0], T[1], T[2]);
+    ATM.kAmb = 1; const c = atmColors(58), l = 0.2126 * c.amb[0] + 0.7152 * c.amb[1] + 0.0722 * c.amb[2]; ATM.kAmb = 0.7 / Math.max(1e-6, l);
+    ATM.Kn = atmColors(58).key;
+    ATM.SV = new Float32Array(ATM.SW * ATM.SH * 4); ATM.SVb = new Float32Array(ATM.SW * ATM.SH * 4);
+    const gl = R.gl; ATM.tex = gl.createTexture(); gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, ATM.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, ATM.SW, ATM.SH, 0, gl.RGBA, gl.FLOAT, ATM.SV);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.activeTexture(gl.TEXTURE0);
+    ATM.on = true; ATM.built = performance.now() - t0;
+  } catch (e) { console.warn('atmosphere off', e); ATM.on = false; }
+}
+function atmSetWeather(wx) {   // haze thickens in overcast and rain: rebuild the tables
+  const k = wx === 'rain' ? 3.2 : wx === 'overcast' ? 2.4 : wx === 'clear' ? 1.3 : 1.7;
+  if (k === ATM.mieK && ATM.T) return;
+  ATM.mieK = k; if (ATM.on) { atmBuildT(); atmBuildMS(); ATM.h = -1; }
+}
+// per frame: refresh the sky-view table a few rows at a time when the sun has moved or the camera changed altitude
+function atmFrame(env, camY) {
+  if (!ATM.on) return;
+  const hc = Math.max(0.002, camY / 1000), el = env.sunEl;
+  if (!ATM.pend && (ATM.h < 0 || Math.abs(el - ATM.el) > 0.15 || Math.abs(hc - ATM.h) > Math.max(0.12, ATM.h * 0.06))) {
+    ATM.pend = { hc, el, sun: atmSunVec(el), row: 0 };
+    if (ATM.h < 0) { atmSVRows(hc, ATM.pend.sun, 0, ATM.SH); ATM.pend.row = ATM.SH; }   // first time: all at once
+  }
+  const P = ATM.pend;
+  if (P) {
+    const n = Math.min(ATM.SH - P.row, 10); if (n > 0) { atmSVRows(P.hc, P.sun, P.row, P.row + n); P.row += n; }
+    if (P.row >= ATM.SH) {
+      const gl = R.gl; gl.activeTexture(gl.TEXTURE12); gl.bindTexture(gl.TEXTURE_2D, ATM.tex);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, ATM.SW, ATM.SH, gl.RGBA, gl.FLOAT, ATM.SVb); gl.activeTexture(gl.TEXTURE0);
+      const t = ATM.SV; ATM.SV = ATM.SVb; ATM.SVb = t;
+      ATM.h = P.hc; ATM.el = P.el; ATM.horEl = atmHorEl(P.hc); ATM.pend = null;
+    }
+  }
+  const sx = env.sunDir[0], sz = env.sunDir[2], sl = Math.hypot(sx, sz);
+  ATM.sunXZ = sl > 1e-3 ? [sx / sl, sz / sl] : [1, 0];
+  ATM.nightK = smooth(-3, -11, el);
 }
 
 // ---- Miami International: the terminal complex ----
@@ -6749,7 +6971,11 @@ function stepSim(dt) {
     const r = Q.rot(st.q, g.p);
     const P = V3.add(st.pos, r);
     const s = surfaceAt(P[0], P[2], P[1]);
-    const pen = s.h - P[1];
+    // the ground under the wheel: paved (runways, taxiways, the deck), grass/dirt, or water. Unpaved fields are lumpy:
+    // long swells of a few metres plus small ruts, so a fast roll across grass shakes, bounces and loads the gear
+    const grass = !s.pave && !s.water;
+    const bump = grass ? (vnoise(P[0] * 0.11, P[2] * 0.11) - 0.5) * 0.11 + (vnoise(P[0] * 0.47 + 9, P[2] * 0.47) - 0.5) * 0.035 : 0;
+    const pen = s.h + bump - P[1] - (st.flat && st.flat[i] ? 0.09 : 0);
     if (pen > 0) {
       const vp = V3.sub(V3.add(st.vel, V3.cross(wW, r)), s.v || [0, 0, 0]);   // speed over the surface (a carrier deck is moving)
       anyContact = true;
@@ -6765,9 +6991,18 @@ function stepSim(dt) {
       const vf = V3.dot(vp, fh), vl = V3.dot(vp, lat);
       const rwy = s.pave;
       const wet = SIM.opt.weather === 'rain' ? 1 : 0;
-      let muF = g.skid ? 0.5 : rwy ? 0.02 : 0.06, muL = g.skid ? 0.5 : (rwy ? 0.85 : 0.6) * (1 - 0.3 * wet);
+      // rolling resistance: ~2% on asphalt, more on grass, much more on rain-soaked turf (the tyres sink in)
+      let muF = g.skid ? 0.5 : rwy ? 0.02 : 0.065 + 0.05 * wet, muL = g.skid ? 0.5 : (rwy ? 0.85 : 0.55 - 0.15 * wet) * (1 - 0.3 * wet);
+      if (!st.flat) st.flat = a.gear.map(() => 0);
+      if (st.flat[i]) { muF += 0.16; muL *= 0.45; }   // a deflated tyre drags and barely steers
       let brk = 0;
-      if (g.brake && (c.brake || c.park || st.abFrac > 0)) { brk = (rwy ? 0.6 : 0.4) * (c.brake || c.park ? 1 : st.abFrac) * (1 - 0.4 * wet); muF += brk; }
+      if (g.brake && (c.brake || c.park || st.abFrac > 0)) {
+        brk = (rwy ? 0.6 : 0.32 - 0.12 * wet) * (c.brake || c.park ? 1 : st.abFrac) * (1 - 0.4 * wet * (rwy ? 1 : 0));
+        brk *= 1 - 0.65 * smooth(420, 820, st.brakeT || 0);   // hot brakes fade
+        muF += brk;
+      }
+      // wheels spin up on touchdown: for a fraction of a second the tyre skids and drags the nose down
+      if (st.spinT && st.spinT[i] > 0) { muF += 0.55 * st.spinT[i] / 0.14; st.spinT[i] = Math.max(0, st.spinT[i] - dt); }
       if (s.water) { muF = 0.6; muL = 0.6; }
       // hydroplaning on a wet runway: above ~9·sqrt(tyre psi) knots the tyre rides on water
       if (wet && rwy && !g.skid) { const vh = (a.piston ? 25 : 60) * (g.steer ? 0.9 : 1), hp = smooth(vh, vh + 8, Math.abs(vf)); /* m/s: ~49 kt light-aircraft tyres, ~117 kt jet tyres */ muL *= 1 - 0.75 * hp; muF = Math.min(muF, lerp(muF, 0.05, hp)); }
@@ -6778,10 +7013,35 @@ function stepSim(dt) {
       const circle = Math.sqrt(Math.max(0.15, 1 - (brk / Math.max(muL, 0.01)) ** 2 * 0.6));   // braking hard leaves less grip for turning
       const Fy = -muL * N * circle * lerp(Math.tanh(vl / 0.15), Math.sin(1.9 * Math.atan(9 * slip)), g.skid ? 0 : roll);
       if (Math.abs(slip) > 0.2 && roll > 0.5 && Math.abs(vl) > 3 && !s.water && Math.random() < dt * 25) spawnFx('tyre', P, [0, 0.5, 0], 0.8);
+      // brake heat: the energy the brakes soak up warms them; they cool slowly, faster in the airflow
+      if (brk > 0 && g.brake) st.brakeT = (st.brakeT || 0) + brk * N * Math.abs(vf) * dt / (4.2 * a.mass);   // °C: a full-stop airliner landing ~200, a rejected take-off ~550
+      // dust thrown up off grass and dirt
+      if (grass && Math.abs(vf) > 8 && Math.random() < dt * clamp(Math.abs(vf) / 6, 0, 8)) spawnFx('dust', P, [-vf * 0.12 * fh[0], 0.6 + Math.random() * 0.8, -vf * 0.12 * fh[2]], 0.7);
+      // gear overload: a bump hit fast on rough ground can break a strut that a smooth runway never would
+      const Nst = a.mass * GRAV / Math.max(1, a.gear.length - 1) * (g.steer ? 0.35 : 1);
+      if (SIM.opt.crashes && !g.skid && grass && N > Nst * (a.piston ? 4.2 : a.airliner ? 2.9 : 3.5) && Math.abs(vf) > 20) { losePiece(g.piece, 'overloaded on rough ground'); continue; }
+      // and repeated jolts fatigue it: heavy jets are built for smooth pavement, not ploughed fields
+      if (SIM.opt.crashes && !g.skid && grass && Math.abs(vf) > 18) {
+        if (!st.gStress) st.gStress = a.gear.map(() => 0);
+        st.gStress[i] += Math.max(0, N / Nst - 1.2) * dt * (a.airliner ? 2 : a.piston ? 0.15 : a.carrier ? 0.6 : 1.2) * clamp(Math.abs(vf) / 40, 0.5, 2);
+        if (st.gStress[i] > 1) { losePiece(g.piece, 'broke up on rough ground'); continue; }
+        if (st.gStress[i] > 0.55 && !st.gWarn) { st.gWarn = 1; ui.toast('GEAR STRESS', 'Rough ground — slow down'); }
+      }
       const F = V3.add(V3.add(V3.mul(fh, Fx), V3.mul(lat, Fy)), [0, N, 0]);
       Fw = V3.add(Fw, F);
       Mw = V3.add(Mw, V3.cross(r, F));
     } else { st.contacts[i] = false; st.comp[i] = Math.max(0, (st.comp[i] || 0) - dt * 2.5); }
+  }
+  // brakes cool toward ambient: slowly at rest, faster with air flowing over them; overheated, the fuse plugs melt and the tyres deflate
+  if (st.brakeT) {
+    st.brakeT = Math.max(0, st.brakeT - st.brakeT * (0.0035 + 0.00045 * Math.min(V3.len(st.vel), 120)) * dt);
+    if (st.brakeT > 380 && !st.brakeWarn) { st.brakeWarn = 1; ui.toast('BRAKES HOT', `${Math.round(st.brakeT + 20)}°C — let them cool`); }
+    if (st.brakeT < 250) st.brakeWarn = 0;
+    if (st.brakeT > 900 && !st.fusePlug) {
+      st.fusePlug = 1; a.gear.forEach((g, k) => { if (g.brake) st.flat[k] = 1; });
+      ui.toast('TYRES DEFLATED', 'Brake heat melted the fuse plugs'); SIM.ev.push({ t: 'thump', v: 0.8 });
+    }
+    if (st.brakeT > 600 && st.onGround && Math.random() < dt * 6) { const gb = a.gear.find(g => g.brake); if (gb) spawnFx('smoke', V3.add(st.pos, Q.rot(st.q, gb.p)), [0, 1.2, 0], 0.6); }
   }
   // hard points: airframe scrapes and slides; wings/tail tear off; spinning blades shatter;
   // a violent impact breaks the aircraft apart
@@ -6893,6 +7153,8 @@ function onTouch(g, vp, water, P) {
   const vt = Math.hypot(vp[0], vp[2]);
   // wheels spin up on contact: puff of tyre smoke, a black mark on the runway, a screech
   if (!g.skid && !water && vt > 12 && st.airT > 0.6) {
+    if (!st.spinT) st.spinT = a.gear.map(() => 0);
+    const gi = a.gear.indexOf(g); if (gi >= 0) st.spinT[gi] = 0.14;
     const n = Math.round(clamp(vt / 6, 2, 10));
     for (let i = 0; i < n; i++) spawnFx('tyre', [P[0], P[1] + 0.2, P[2]], [vp[0] * 0.15 + (Math.random() - .5) * 2, 0.6 + Math.random(), vp[2] * 0.15 + (Math.random() - .5) * 2]);
     if (typeof addSkid === 'function') addSkid(P, vp, clamp(vt * 0.28, 4, 16), g.brake ? 0.18 : 0.12);
@@ -11057,6 +11319,7 @@ function init() {
   G.models = {};
   for (const k in AC) G.models[k] = AC[k].build();
   window.__tm.push(['models', performance.now() | 0, G.terrain.map(t => t.n / 3)]);
+  atmInit(); window.__tm.push(['atmos', performance.now() | 0, ATM.on, Math.round(ATM.built || 0)]);
   setTime(CFG.time);
   buildMinimap();
   menuRender();
@@ -11538,6 +11801,7 @@ function render() {
   const wd = SIM.windDir || [1, 0, 0]; env.wave = [wd[0], wd[2]];
   env.sea = { calm: 0.2, light: 0.4, moderate: 0.68, strong: 1.0 }[SIM.opt.wind] || 0.4;   // sea state follows the wind
   env.wakes = seaWakes(); env.clouds = cloudShadowList(); env.nk = nukeShaderState();
+  atmFrame(env, cam.eye[1]);   // physically based sky: refresh its table as the sun moves or we climb
   wsmUpdate(usePost ? POST.scene.fb : null, cvs.width, cvs.height);
   env.c3 = c3On() && c3Render(M4.mul(proj, view), env, cvs.width, cvs.height) ? C3.P : null;   // volumetric clouds: marched into their own buffer before the scene
   gl.bindFramebuffer(gl.FRAMEBUFFER, usePost ? POST.scene.fb : null); gl.viewport(0, 0, cvs.width, cvs.height); gl.enable(gl.DEPTH_TEST); gl.useProgram(R.pr);
@@ -11884,7 +12148,7 @@ function updateHUD(dt) {
   $('warn').textContent = w.join(' · ');
   const n = nearestAirport(st.pos[0], st.pos[2]);
   const brg = (Math.round(Math.atan2(n.ap.x - st.pos[0], -(n.ap.z - st.pos[2])) / D2R) + 360) % 360;
-  $('status').innerHTML = `${n.ap.code} ${(n.d / 1000).toFixed(1)} km · ${String(brg).padStart(3, '0')}°<br>AGL ${Math.max(0, Math.round(agl * FT))} ft · ${st.g.toFixed(1)} G` +
+  $('status').innerHTML = `${n.ap.code} ${(n.d / 1000).toFixed(1)} km · ${String(brg).padStart(3, '0')}°<br>AGL ${Math.max(0, Math.round(agl * FT))} ft · ${st.g.toFixed(1)} G${(st.brakeT || 0) > 120 ? ` · <span style="color:${st.brakeT > 420 ? '#ff8a6a' : '#ffd27a'}">BRK ${Math.round(st.brakeT + 20)}°C</span>` : ''}` +
     (a.piston ? `<br>CHT ${Math.round(st.cht)}°C · MIX ${SIM.opt.assist ? 'AUTO' : Math.round(c.mix * 100) + '%'}${st.carbIce > 0.15 ? ' · ICE ' + Math.round(st.carbIce * 100) + '%' : ''}` : '') + (a.kind === 'heli' ? `<br>ROTOR ${Math.round(st.rpm * 100)}%${a.twin ? (st.oei ? ' · ENG 1 OUT' : ' · ENG 1+2') : ''}` : '') + (a.hyper ? `<br>${st.mach > 3 && c.thr > 0.05 ? 'SCRAMJET' : 'TURBINE'} · SKIN ${Math.round(st.skinT)}°C` : '') + (a.f22 ? `<br>${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? ((st.mach || 0) >= 1 ? 'SUPERCRUISE' : 'MIL POWER') : 'ENGINES OFF'} · ${Math.round(st.g * 10) / 10} G · AOA ${Math.round((st.alpha || 0) / D2R)}°` : '') + (a.b2 ? `<br>MACH ${(st.mach || 0).toFixed(2)} · ${Math.round(st.g * 10) / 10} G · BAYS ${(st.bayK || 0) > 0.95 ? 'OPEN' : (st.bayK || 0) > 0.02 ? 'MOVING' : 'CLOSED'} · ${(st.bayK || 0) > 0.3 ? 'RADAR VISIBLE' : 'STEALTH'}` : '') + (a.sr71 ? `<br>KEAS ${Math.round(Math.sqrt(2 * (st.qbar || 0) / 1.225) * KT)} · ${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? 'MIL POWER' : 'ENGINES OFF'}<br>CIT ${Math.round(st.cit || 15)}°C · SKIN ${Math.round(st.skinT)}°C · SPIKES ${Math.round(clamp(((st.mach || 0) - 1.6) / 1.6, 0, 1) * 26)} in` : '') + (st.damage.length ? `<br><span style="color:#ff8a7a">⚠ ${st.damage.join(' · ')}</span>` : '') + (st.engine && st.rpm < 0.25 && st.starting > 0 ? '<br>ENGINE STARTING…' : '') + (SIM.opt.wind !== 'calm' ? `<br>WIND ${String(SIM.opt.windFrom).padStart(3, '0')}° ${Math.round(Math.hypot(SIM.wind[0], SIM.wind[2]) * KT)} kt <span style="display:inline-block;transform:rotate(${(SIM.opt.windFrom - hd + 180)}deg)">↑</span>` : '');
   if (AI.hostileOn && MILITARY(a.key)) $('status').innerHTML += `<br><span style="color:#ffb39f">WAVE ${AI.wave || 1} · ${AI.kills || 0} KILL${AI.kills === 1 ? '' : 'S'}${cvShip() ? ' · ' + cvShip().wing + ' ON DECK' : ''}</span>`;
   { const rp = $('radio'); if (rp && rp.classList.contains('on')) rp.style.top = Math.round($('status').getBoundingClientRect().bottom + 6) + 'px'; }
