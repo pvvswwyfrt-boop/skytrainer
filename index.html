@@ -1578,7 +1578,7 @@ function screensInit() {
   gl.bindAttribLocation(p, 0, 'aPos'); gl.bindAttribLocation(p, 1, 'aUV'); gl.linkProgram(p);
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) return;
   SCR.p = p; SCR.uMVP = gl.getUniformLocation(p, 'uMVP'); SCR.uT = gl.getUniformLocation(p, 'uT'); SCR.uB = gl.getUniformLocation(p, 'uB');
-  SCR.cv = document.createElement('canvas'); SCR.cv.width = 1024; SCR.cv.height = 256; SCR.ctx = SCR.cv.getContext('2d');
+  SCR.cv = document.createElement('canvas'); SCR.cv.width = 1536; SCR.cv.height = 256; /* six 256-px pages */ SCR.ctx = SCR.cv.getContext('2d');
   SCR.tex = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, SCR.tex);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, SCR.cv);
   for (const [k, v] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]]) gl.texParameteri(gl.TEXTURE_2D, k, v);
@@ -1592,9 +1592,10 @@ function screensDraw(VP, M, screens, bright) {
   const d = [];
   for (const s of screens) {
     const n = V3.norm(s.n), up = s.up || [0, 1, 0], rt = V3.norm(V3.cross(V3.mul(n, -1), up)), u = V3.cross(rt, V3.mul(n, -1));
-    const c = V3.add(s.c, V3.mul(n, 0.011)), hw = s.w / 2, hh = s.h / 2, u0 = s.page * 0.25, u1 = u0 + 0.25;
+    const pw = 256 / SCR.cv.width, c = V3.add(s.c, V3.mul(n, 0.011)), hw = s.w / 2, hh = s.h / 2, ar = s.w / s.h;
+    let u0 = s.page * pw, u1 = u0 + pw, v0 = 0, v1 = 1; if (ar > 1.05) { v0 = (1 - 1 / ar) / 2; v1 = 1 - v0; }   // wide screens use a band of their page
     const P = (a, b) => V3.add(c, V3.add(V3.mul(rt, a * hw), V3.mul(u, b * hh)));
-    const q = [[P(-1, -1), u0, 1], [P(1, -1), u1, 1], [P(1, 1), u1, 0], [P(-1, -1), u0, 1], [P(1, 1), u1, 0], [P(-1, 1), u0, 0]];
+    const q = [[P(-1, -1), u0, v1], [P(1, -1), u1, v1], [P(1, 1), u1, v0], [P(-1, -1), u0, v1], [P(1, 1), u1, v0], [P(-1, 1), u0, v0]];
     for (const [p, uu, vv] of q) d.push(p[0], p[1], p[2], uu, vv);
   }
   gl.useProgram(SCR.p);
@@ -5627,7 +5628,7 @@ const AC = {
     },
     // transonic drag rise, then falling wave drag: total drag ~0.015-0.02 supercruising at Mach 1.5-1.8; climbs steeply past Mach 2.2
     machDrag: M => M < 0.85 ? 0 : M < 1.15 ? 0.0115 * smooth(0.85, 1.15, M) : 0.0115 * Math.pow(1.15 / M, 0.6) + 0.12 * Math.max(0, M - 2.2) ** 2,
-    tvc: 5.6, tvcDeg: 20, spool: 0.5, startTime: 7,   // 2-D nozzles vector ±20° in pitch, about 5.6 m behind the centre of gravity
+    tvc: 5.6, tvcDeg: 20, spool: 0.5, startTime: 7, vtxTip: [-3.0, -0.02, 6.33],   // 2-D nozzles vector ±20° in pitch, about 5.6 m behind the centre of gravity
     sets: [0, 20], setLabel: 'FLAPS', FCL: [0, 0.22], FCD: [0, 0.03], FCM: [0, -0.02], flapAS: [0, 0], flapRate: 15,
     gear: [
       { p: [-0.755, -2.05, 1.58], k: 1150000, c: 120000, brake: true, piece: 'gear' }, { p: [-0.755, -2.05, -1.58], k: 1150000, c: 120000, brake: true, piece: 'gear' },
@@ -6384,26 +6385,35 @@ function buildF22() {
     for (let i = 0; i < ch.nv; i++) d.push(ch.pos[i * 3], ch.pos[i * 3 + 1], ch.pos[i * 3 + 2], ch.nor[i * 3], ch.nor[i * 3 + 1], ch.nor[i * 3 + 2], 0.3, 0.6, 0.35, 2);
     parts.push(part(mb, O, Y, Z, { piece: 'fuse', alpha: () => 0.18, twoSided: true }));
   }
-  // ---- afterburner plumes from the rectangular nozzles: faint at military power, long and bright in reheat
+  // ---- F119 exhaust from the flat 2-D nozzles. The F119 has no spray bars or flame holders (fuel comes in through the turbine-masking
+  // vanes), so its plume is short and flattened, with a bright core at the lip, a pinkish-orange body and soft, slightly irregular shock
+  // diamonds. In daylight a dry engine shows nothing but heat; the flame belongs to reheat. Thin air at altitude stretches it.
   const NX = -5.4, NY = 0.03, NZ = 0.64;
-  const core = AMB(), glow = AMB(), dia = AMB(), dry = AMB();
-  rev(core, O, [-1, 0, 0], [[0, 0.42], [0.06, 0.4], [0.4, 0.26], [1, 0]], 16, [1, 0.45, 0.18, 3], [1, 1], 2);
-  for (let k = 0; k < 6; k++) dia.ico([-(0.08 + k * 0.14), 0, 0], 0.3 * (1 - k * 0.1), [1, 0.78, 0.45, 3], 0.04 * (1 + k * 0.1), 1, 1);
-  rev(glow, O, [-1, 0, 0], [[0, 0.5], [0.25, 0.58], [0.65, 0.4], [1, 0]], 16, [1, 0.5, 0.2, 3], [1, 1], 2);
-  rev(dry, O, [-1, 0, 0], [[0, 0.4], [0.5, 0.3], [1, 0]], 14, [0.35, 0.3, 0.28, 3], [1, 1], 2);
+  const core = AMB(), body = AMB(), haze = AMB(), heat = AMB(), dmd = AMB();
+  rev(core, O, [-1, 0, 0], [[0, 0.36], [0.15, 0.37], [0.55, 0.26], [1, 0]], 18, [1, 0.88, 0.62, 3], [1, 1], 2);
+  rev(body, O, [-1, 0, 0], [[0, 0.4], [0.18, 0.44], [0.5, 0.36], [0.8, 0.2], [1, 0]], 18, [1, 0.52, 0.3, 3], [1, 1], 2);
+  rev(haze, O, [-1, 0, 0], [[0, 0.44], [0.3, 0.55], [0.7, 0.42], [1, 0]], 16, [1, 0.42, 0.24, 3], [1, 1], 2);
+  rev(heat, O, [-1, 0, 0], [[0, 0.38], [0.4, 0.3], [1, 0]], 14, [0.9, 0.42, 0.22, 3], [1, 1], 2);
+  rev(dmd, O, [-1, 0, 0], [[0, 0], [0.5, 1], [1, 0]], 14, [1, 0.86, 0.66, 3], [1, 1], 2);
   for (const sg of [1, -1]) {
-    const vec = { pivot: [NX + 0.6, NY, sg * NZ], axis: [0, 0, 1], angle: s => -clamp(s.st.tv || 0, -1, 1) * 0.3 };
-    const off = () => [NX, NY, sg * NZ], thin = s => 1 - airRho(s.st.pos[1]) / 1.225;
-    const ab = s => s.engine ? (s.st.ab || 0) : 0, fl = (s, f) => 0.8 + 0.2 * Math.sin(s.t * f + sg);
-    const flat = (s, L) => { const k = thin(s); return [L * (1 + k * 0.6), 0.6 + k * 0.3, 1.25 + k * 0.3]; };
-    parts.push(part(core, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, outer: vec,
-      alpha: s => Math.min(1, ab(s) * 0.5) * fl(s, 41), scale: s => flat(s, 3 + 2.5 * ab(s)) }));
-    parts.push(part(dia, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, outer: vec,
-      alpha: s => Math.min(0.35, ab(s) * 0.4) * fl(s, 53) * (1 - 0.5 * thin(s)), scale: s => flat(s, 3 + 2.5 * ab(s)) }));
-    parts.push(part(glow, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, outer: vec,
-      alpha: s => ab(s) * 0.12 * (1 - 0.5 * thin(s)), scale: s => flat(s, 4.5 + 3 * ab(s)) }));
-    parts.push(part(dry, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, outer: vec,
-      alpha: s => s.engine ? Math.max(0, s.rpm - 0.3) * 0.35 * (1 - ab(s)) * fl(s, 29) : 0, scale: s => flat(s, 2.5) }));
+    const vec = { pivot: [NX + 0.6, NY, sg * NZ], axis: [0, 0, 1], angle: s => -clamp(s.st.tv || 0, -1, 1) * 0.35 };   // follows the ±20° nozzle flaps
+    const thin = s => clamp(1 - airRho(s.st.pos[1]) / 1.225, 0, 0.85), ab = s => s.engine ? (s.st.ab || 0) : 0;
+    const fl = (s, f) => 0.86 + 0.14 * Math.sin(s.t * f + sg * 1.7) * Math.sin(s.t * f * 0.37 + sg);
+    const off = () => [NX, NY, sg * NZ], W = (s, w) => { const k = thin(s); return [0.55 + k * 0.25, 1.22 + k * 0.3].map(v => v * w); };   // flat: wide, not tall
+    const P = (mesh, L, w, alpha) => parts.push(part(mesh, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, outer: vec, alpha,
+      scale: s => { const ww = W(s, w(s)); return [L(s) * (1 + thin(s) * 0.7), ww[0], ww[1]]; } }));
+    P(heat, () => 1.3, () => 1, s => s.engine ? clamp(s.rpm - 0.55, 0, 0.45) * (1 - ab(s)) * (0.05 + 0.3 * clamp(env.lightK * 1.5, 0, 1)) : 0);   // dry: only a dull glow, seen at night
+    P(core, s => 0.8 + 0.7 * ab(s), () => 1, s => clamp(ab(s) * 1.4, 0, 0.85) * fl(s, 47));
+    P(body, s => 1.8 + 1.8 * ab(s), s => 0.88 + 0.12 * ab(s), s => ab(s) * 0.24 * fl(s, 31) * (1 - 0.35 * thin(s)));
+    P(haze, s => 2.6 + 1.8 * ab(s), () => 0.95, s => ab(s) * 0.05 * (1 - 0.4 * thin(s)));
+    // shock diamonds: fixed-shape cells (not stretched with the plume), spaced ~0.8 m, fading downstream, spacing opens up with altitude
+    for (let k = 0; k < 4; k++) {
+      const sz = 1 - k * 0.16;
+      parts.push(part(dmd, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, outer: vec,
+        offset: s => [NX - (0.55 + k * 0.82) * (1 + thin(s) * 0.9) - 0.1 * Math.sin(s.t * 23 + k), NY, sg * NZ],
+        alpha: s => ab(s) > 0.15 ? (ab(s) - 0.15) * 0.42 * (1 - k * 0.2) * fl(s, 61 + k * 7) * (1 - 0.3 * thin(s)) : 0,
+        scale: s => [0.5 * sz, 0.13 * sz * (1 + thin(s) * 0.3), 0.36 * sz * (1 + thin(s) * 0.3)] }));
+    }
   }
   // ---- pieces that break off in a crash
   const piece = (groups, mass) => {
@@ -6416,13 +6426,27 @@ function buildF22() {
   };
   const pieces = { fuse: piece(['fuse'], 0.66), wingR: piece(['wingR'], 0.1), wingL: piece(['wingL'], 0.1), tail: piece(['finR', 'finL', 'stabR', 'stabL'], 0.08), gear: piece(['gearR', 'gearL', 'gearN'], 0.06) };
   // lights: position lights in the wingtips, tail light on the boom, beacon on the spine; landing light on the nose gear
-  const lights = navLights([-2.35, -0.05, 6.42], [-8.0, 0.02, 0], [-1.2, 0.78, 0]);
-  lights.extra = [{ k: 'land', p: [5.36, -0.9, 0], c: [1, 0.96, 0.88], size: 2400, gear: true }, { k: 'strobe', p: [-2.4, -0.05, 6.45], c: [1, 1, 1], wing: 1 }, { k: 'strobe', p: [-2.4, -0.05, -6.45], c: [1, 1, 1], wing: -1 }];
+  // exterior lights, kept small and dim the way they really are (they're for other pilots, not for show):
+  //   red/green position lights in the wingtips, a white tail light, red anti-collision flashers at the tops of both fins,
+  //   low-intensity green formation strips (fins, wingtips, forward fuselage), and the landing/taxi light on the nose gear
+  const fb = b7bounds('finR', D), finTop = [fb.mn[0] + (fb.mx[0] - fb.mn[0]) * 0.32, fb.mx[1] - 0.05, fb.mx[2] - 0.04];
+  const lights = navLights([-2.35, -0.05, 6.42], [-8.0, 0.02, 0], finTop);
+  lights.noBeacon = true;
+  lights.extra = [{ k: 'land', p: [5.36, -0.9, 0], c: [1, 0.96, 0.88], size: 1600, gear: true },
+    { k: 'acl', p: finTop, c: [1, 0.12, 0.06], ph: 0 }, { k: 'acl', p: mirrorZ(finTop), c: [1, 0.12, 0.06], ph: 0.5 },
+    { k: 'form', p: [fb.mn[0] + (fb.mx[0] - fb.mn[0]) * 0.55, (fb.mn[1] + fb.mx[1]) / 2, fb.mx[2] - 0.12], c: [0.45, 1, 0.55] }, { k: 'form', p: mirrorZ([fb.mn[0] + (fb.mx[0] - fb.mn[0]) * 0.55, (fb.mn[1] + fb.mx[1]) / 2, fb.mx[2] - 0.12]), c: [0.45, 1, 0.55] },
+    { k: 'form', p: [-2.9, 0.02, 6.2], c: [0.45, 1, 0.55], wing: 1 }, { k: 'form', p: [-2.9, 0.02, -6.2], c: [0.45, 1, 0.55], wing: -1 },
+    { k: 'form', p: [3.6, 0.35, 1.18], c: [0.45, 1, 0.55] }, { k: 'form', p: [3.6, 0.35, -1.18], c: [0.45, 1, 0.55] }];
   // live displays laid over the instrument panel: primary MFD in the middle, two secondary MFDs either side
   const PN = [-0.9747, 0.2235, 0], PU = [0.2235, 0.9747, 0], px = y => 7.471 + 0.2293 * (y - 0.752) - 0.004;
   const scr = (y, z, w, h, page) => ({ c: [px(y), y, z], n: PN, up: PU, w, h, page });
-  const screens = [scr(0.705, 0, 0.2, 0.2, 1), scr(0.712, -0.236, 0.155, 0.155, 0), scr(0.712, 0.236, 0.155, 0.155, 2)];
-  return { parts, pieces, lights, screens, eye: [6.82, 1.2, 0], hud: { x: 7.45, y0: 1.01, y1: 1.21, z: 0.09 }, len: 18.9, span: 13.56 };
+  const screens = [scr(0.705, 0, 0.2, 0.2, 1), scr(0.712, -0.236, 0.159, 0.159, 0), scr(0.712, 0.236, 0.159, 0.159, 2),
+    scr(0.885, -0.165, 0.1, 0.076, 4), scr(0.885, 0.165, 0.1, 0.076, 5), scr(0.505, 0, 0.159, 0.159, 3)];
+  // wide-angle HUD: 30° x 25° field of view from the design eye (0.63 m behind the combiner)
+  { const mb = new MB(), x = 7.44, y0 = 0.985, y1 = 1.27, zw = 0.17;
+    mb.quad([x, y0, -zw], [x + 0.06, y1, -zw], [x + 0.06, y1, zw], [x, y0, zw], [0.55, 0.85, 0.65], [6.8, 1.2, 0]);
+    for (const q of mb.d.length ? [mb] : []) parts.push(part(q, O, Y, Z, { piece: 'fuse', alpha: () => 0.05, twoSided: true, unlit: 1 })); }
+  return { parts, pieces, lights, screens, eye: [6.82, 1.2, 0], hud: { x: 7.47, y0: 0.985, y1: 1.27, z: 0.17 }, len: 18.9, span: 13.56, ckFov: 62 };
 }
 
 // ===================== Lockheed Martin F-35A Lightning II =====================
@@ -6872,7 +6896,9 @@ function stepSim(dt) {
       const Cn = (a.CNB * tk - 0.03 * (1 - tk)) * beta + a.CNDR * yawIn * tk + a.CNR * (0.2 + 0.8 * tk) * yR * a.b / (2 * Vd) + a.CNDA * rollIn + (rw - lw) * 0.02;
       Mb = V3.add(Mb, [qbar * a.S * a.b * (Cl + ClSpin), -qbar * a.S * a.b * (Cn + CnSpin), qbar * a.S * a.c * Cm]);
       if (a.tvc) {   // vectoring nozzles: ±tvcDeg of pitch; the deflected jet also pushes the tail down a little and costs some axial thrust
-        st.tv = st.engine ? clamp(pitchIn, -1, 1) : 0;
+        // the flight computer leans on vectoring at low dynamic pressure and high AoA; at speed the stabilators do most of the work
+        const tvS = lerp(1, 0.3, smooth(9000, 32000, qbar)) + 0.7 * smooth(0.25, 0.5, alpha) * smooth(9000, 32000, qbar);
+        st.tv = st.engine ? clamp(pitchIn * tvS, -1, 1) : 0;
         const dn = (a.tvcDeg || 20) * D2R * st.tv, Tp = Math.max(0, T) * tk;
         Mb = V3.add(Mb, [0, 0, Math.sin(dn) * Tp * a.tvc]);
         Fb = V3.add(Fb, [-(1 - Math.cos(dn)) * Tp, -Math.sin(dn) * Tp, 0]);
@@ -7112,21 +7138,47 @@ function stepSim(dt) {
   // ---- integrate ----
   const acc = V3.mul(Fw, 1 / mass);
   st.g = V3.dot(Q.inv(st.q, V3.add(acc, [0, GRAV, 0])), [0, 1, 0]) / GRAV;
-  if (a.kind === 'fixed' && st.airborne && !st.crashed) {   // condensation: wing vapour in hard pulls, wingtip trails, the shock collar near Mach 1
-    const fk = SIM.fxK || 1, hum = Math.max(0, 1 - st.pos[1] / 9000), M = st.mach || 0, span = a.b || 10, len = (G.models[a.key] && G.models[a.key].len) || span;
-    const pull = clamp((st.g - 3.2) / 3, 0, 1) * hum * clamp((st.tas - 110) / 60, 0, 1);
-    if (pull > 0 && Math.random() < dt * 120 * pull * fk) for (let k = 0; k < 7; k++) {
-      const sz = (Math.random() < 0.5 ? -1 : 1) * span * (0.1 + Math.random() * 0.36), lp = [-len * 0.04 + (Math.random() - 0.5) * len * 0.1, 0.3 + Math.random() * 0.15, sz];
-      spawnFx('vapor', V3.add(st.pos, Q.rot(st.q, lp)), V3.mul(st.vel, 0.99), (0.35 + Math.random() * 0.45) * (span / 12));
+  if (a.kind === 'fixed' && st.airborne && !st.crashed) {
+    // ---- condensation. Visible only when the air is moist enough: Miami is humid, rain and overcast more so, and the water
+    // content of the air falls away with height. Three effects, each with its own physics:
+    //  1) wingtip vortex trails: the low-pressure vortex cores left by lifting wings. They stay where the air is (not glued to the
+    //     jet), so they draw thin lines behind the tips. Need lift: G or angle of attack.
+    //  2) over-wing condensation: a sheet hugging the upper surface in hard pulls and at high AoA, peeling off the trailing edge.
+    //  3) forebody / chine vortices at high AoA (F-22, F-35) and the vapour collar near Mach 1.
+    const fk = SIM.fxK || 1, M = st.mach || 0, span = a.b || 10, len = (G.models[a.key] && G.models[a.key].len) || span;
+    const wx = (typeof CFG !== 'undefined' && CFG.weather) || 'scattered';
+    const hum = (wx === 'rain' ? 1 : wx === 'overcast' ? 0.9 : wx === 'clear' ? 0.55 : 0.75) * clamp(1 - st.pos[1] / 9500, 0, 1);
+    const alpha = Math.abs(st.alpha || 0), tasK = clamp((st.tas - 70) / 60, 0, 1);
+    const vk = clamp(Math.max((st.g - 2.2) / 4.5, (alpha - 0.13) / 0.22), 0, 1) * hum * tasK;
+    if (!st.vtxPrev) st.vtxPrev = {};
+    for (const sd of [1, -1]) {
+      const tipL = a.vtxTip ? [a.vtxTip[0], a.vtxTip[1], sd * a.vtxTip[2]] : [-len * 0.16, 0.04, sd * span * 0.47];
+      const cur = V3.add(st.pos, Q.rot(st.q, tipL)), prev = st.vtxPrev[sd];
+      if (vk > 0.06 && prev && V3.len(V3.sub(cur, prev)) < 60 && !(st.lost && st.lost[sd > 0 ? 'wingR' : 'wingL'])) {
+        const d = V3.len(V3.sub(cur, prev)), n = Math.min(40, Math.ceil(d / 0.6)) * (fk < 1 ? 0.5 : 1);
+        for (let k = 1; k <= n; k++) { const q = V3.lerp(prev, cur, k / n);
+          spawnFx('vtx', q, [SIM.wind[0] + (Math.random() - 0.5) * 0.3, SIM.wind[1] - 0.2, SIM.wind[2] + (Math.random() - 0.5) * 0.3], (0.1 + 0.22 * vk) * (span / 12) * (0.85 + Math.random() * 0.3)); }
+      }
+      st.vtxPrev[sd] = cur;
     }
-    const tip = clamp(Math.max((st.g - 2.2) / 2.5, (Math.abs(st.alpha || 0) - 0.14) / 0.15), 0, 1) * hum * clamp((st.tas - 80) / 60, 0, 1);
-    if (tip > 0 && Math.random() < dt * 60 * fk) for (const s of [1, -1]) spawnFx('vapor', V3.add(st.pos, Q.rot(st.q, [-len * 0.2, 0.05, s * span * 0.49])), V3.mul(st.vel, 0.9), 0.35 + 0.4 * tip);
+    st.vtxK = vk;
+    const sheet = clamp(Math.max((st.g - 3.8) / 3.5, (alpha - 0.2) / 0.22), 0, 1) * hum * clamp((st.tas - 90) / 60, 0, 1);
+    if (sheet > 0.04 && Math.random() < dt * 140 * fk) for (let k = 0; k < Math.ceil(8 * sheet); k++) {
+      const eta = 0.12 + Math.random() * 0.78, sz = (Math.random() < 0.5 ? -1 : 1) * span * 0.5 * eta;
+      const lp = [-len * 0.06 - (1 - eta) * len * 0.04 + (Math.random() - 0.5) * len * 0.08, 0.22 + Math.random() * 0.18 + alpha * 0.4, sz];
+      spawnFx('vapor', V3.add(st.pos, Q.rot(st.q, lp)), V3.mul(st.vel, 0.975), (0.3 + Math.random() * 0.4) * (span / 12) * (0.7 + sheet * 0.5));
+    }
+    st.vapK = sheet;
+    if (a.fbw && alpha > 0.28 && hum > 0.25 && st.tas > 60 && Math.random() < dt * 90 * fk) for (const sd of [1, -1]) {
+      const x0 = len * 0.12 - Math.random() * len * 0.3;
+      spawnFx('vapor', V3.add(st.pos, Q.rot(st.q, [x0, 0.3 + (len * 0.12 - x0) * 0.08, sd * (0.9 + (len * 0.12 - x0) * 0.12)])), V3.mul(st.vel, 0.97), 0.28 + Math.random() * 0.25);
+    }
     const cone = (1 - Math.abs(M - 0.99) / 0.06) * hum * hum;
     if (cone > 0 && Math.random() < dt * 160 * cone * fk) for (let k = 0; k < 10; k++) {
       const an = Math.random() * 6.283, back = Math.random() * len * 0.25, r = Math.max(1.0, span * 0.08) + back * 0.55;   // a cone flaring back from the shock
       spawnFx('vapor', V3.add(st.pos, Q.rot(st.q, [-len * 0.02 - back, Math.cos(an) * r, Math.sin(an) * r])), V3.mul(st.vel, 0.995), 0.45 + Math.random() * 0.45);
     }
-  }
+  } else if (st.vtxPrev) st.vtxPrev = {};
   if (a.limits) checkLimits(st, a, dt);
   st.vel = V3.add(st.vel, V3.mul(acc, dt));
   st.pos = V3.add(st.pos, V3.mul(st.vel, dt));
@@ -7331,7 +7383,7 @@ function stepDebris(dt) {
 }
 
 // visual effects particles: fire, smoke, dust, sparks, spray, explosions
-const FXL = { aball: [0.42, 0.3], asmoke: [9, 6], frag: [0.5, 0.35], xball: [1.3, 0.9], tsmoke: [2.2, 1.4], dirt: [2.2, 1.2], wcol: [3.2, 1.6], mist: [4.5, 2.5], fchunk: [2.4, 1.6], drip: [0.7, 0.3], teb: [0.4, 0.2], rglow: [0.22, 0.12], vapor: [0.18, 0.12], vent: [4, 3], steam: [9, 6], rtrail: [11, 6], rdust: [5, 3], trail: [7, 3], tyre: [1.6, 1], fire: [0.7, 0.6], flame: [0.12, 0.08], smoke: [5, 4], bsmoke: [13, 9], dust: [2, 2], spark: [0.4, 0.5], spray: [1, 1],
+const FXL = { aball: [0.42, 0.3], asmoke: [9, 6], frag: [0.5, 0.35], xball: [1.3, 0.9], tsmoke: [2.2, 1.4], dirt: [2.2, 1.2], wcol: [3.2, 1.6], mist: [4.5, 2.5], fchunk: [2.4, 1.6], drip: [0.7, 0.3], teb: [0.4, 0.2], rglow: [0.22, 0.12], vapor: [0.18, 0.12], vtx: [1.1, 0.7], vent: [4, 3], steam: [9, 6], rtrail: [11, 6], rdust: [5, 3], trail: [7, 3], tyre: [1.6, 1], fire: [0.7, 0.6], flame: [0.12, 0.08], smoke: [5, 4], bsmoke: [13, 9], dust: [2, 2], spark: [0.4, 0.5], spray: [1, 1],
   fball: [0.7, 0.6], flash: [0.22, 0], shock: [0.45, 0], ember: [1.0, 1.6], chunk: [1.6, 1.4], mtrail: [3.5, 2] };
 const FXS = { aball: 4, asmoke: 4.5, frag: 0.16, xball: 6, tsmoke: 1.2, dirt: 0.9, wcol: 3, mist: 5, fchunk: 0.22, drip: 0.05, teb: 1.3, rglow: 5, vapor: 1.5, vent: 1.2, steam: 7, rtrail: 4, rdust: 4, spark: 0.12, fire: 1.2, flame: 0.45, dust: 0.6, spray: 0.35, smoke: 0.9, bsmoke: 2.2, tyre: 0.6, trail: 1.2, fball: 2.5, flash: 8, shock: 3, ember: 0.09, chunk: 0.18, mtrail: 0.7 };
 function spawnFx(type, p, v, size) {
@@ -7340,8 +7392,8 @@ function spawnFx(type, p, v, size) {
   const s = size || (FXS[type] || 1) * (type === 'fire' || type === 'dust' ? 0.8 + Math.random() * 0.6 : 1);
   SIM.fx.push({ type, p: p.slice(), v: v.slice(), life, max: life, s, s0: s, seed: Math.random(), rot: Math.random() * 6.3, spin: (Math.random() - 0.5) * 1.2 });
 }
-const FXDRAG = { aball: 4.5, asmoke: 0.9, frag: 0.25, xball: 3.4, tsmoke: 0.9, dirt: 0.35, wcol: 0.55, mist: 1.1, fchunk: 0.15, drip: 0.0001, teb: 0.0001, rglow: 0.0001, vapor: 0.0001, vent: 1.2, steam: 0.45, rtrail: 0.7, rdust: 0.9, trail: 0.4, mtrail: 0.6, tyre: 1.8, smoke: 0.6, bsmoke: 0.5, fire: 1.2, flame: 3, dust: 1.5, fball: 2.6, ember: 0.35, chunk: 0.15, spray: 0.25, spark: 0.2 };
-const FXGROW = { aball: 3.2, asmoke: 0.75, xball: 2.4, tsmoke: 1.4, wcol: 1.6, mist: 2.6, teb: 3, vent: 1.3, steam: 2.2, rtrail: 2.6, rdust: 2.0, smoke: 0.55, bsmoke: 0.75, tyre: 1.8, trail: 0.9, mtrail: 1.6, dust: 0.9, fire: 0.6, fball: 2.2 };
+const FXDRAG = { aball: 4.5, asmoke: 0.9, frag: 0.25, xball: 3.4, tsmoke: 0.9, dirt: 0.35, wcol: 0.55, mist: 1.1, fchunk: 0.15, drip: 0.0001, teb: 0.0001, rglow: 0.0001, vapor: 0.0001, vtx: 0.15, vent: 1.2, steam: 0.45, rtrail: 0.7, rdust: 0.9, trail: 0.4, mtrail: 0.6, tyre: 1.8, smoke: 0.6, bsmoke: 0.5, fire: 1.2, flame: 3, dust: 1.5, fball: 2.6, ember: 0.35, chunk: 0.15, spray: 0.25, spark: 0.2 };
+const FXGROW = { vtx: 0.45, aball: 3.2, asmoke: 0.75, xball: 2.4, tsmoke: 1.4, wcol: 1.6, mist: 2.6, teb: 3, vent: 1.3, steam: 2.2, rtrail: 2.6, rdust: 2.0, smoke: 0.55, bsmoke: 0.75, tyre: 1.8, trail: 0.9, mtrail: 1.6, dust: 0.9, fire: 0.6, fball: 2.2 };
 function stepFx(dt) {
   for (const d of SIM.debris) if (d.burn > 0) {
     d.burn -= dt;
@@ -11318,7 +11370,10 @@ const saveCFG = () => { try { localStorage.setItem('skytrainer-mk8', JSON.string
 let G = {};          // GPU resources
 let env, appState = 'menu', camMode = 'follow';   // the low, level camera right behind the aircraft is the default view
 const look = { y: 0, p: 0, drag: false, last: 0 };
-const CAMS = ['chase', 'follow', 'cockpit', 'orbit', 'flyby'];
+const CAMS = ['chase', 'follow', 'cockpit', 'padlock', 'wing', 'tail', 'side', 'nozzle', 'belly', 'orbit', 'flyby', 'tower'];
+const CAM_LAB = { chase: 'CHASE', follow: 'FOLLOW', cockpit: 'CKPT', padlock: 'PADLOCK', wing: 'WING', tail: 'TAIL', side: 'FORM', nozzle: 'EXHAUST', belly: 'BELLY', orbit: 'ORBIT', flyby: 'FLYBY', tower: 'TOWER' };
+const CAM_EXT = ['padlock', 'wing', 'tail', 'side', 'nozzle', 'belly', 'tower'];   // added views (fixed-wing and helicopters; the rocket keeps its own set)
+const inCk = () => camMode === 'cockpit' || camMode === 'padlock';
 // weapon camera: rides behind your missile or bomb, then holds on the explosion for a moment
 const WCAM = { pr: null, prev: null, hold: 0, boom: null, eye: null };
 function wcamStart(pr) { if (CFG.wpnCam === false || appState !== 'fly') return; if (camMode !== 'weapon') WCAM.prev = camMode; WCAM.pr = pr; WCAM.hold = 0; WCAM.boom = null; WCAM.eye = null; camMode = 'weapon'; cam.init = false; wcamUI(); }
@@ -11526,7 +11581,26 @@ function updateCamera(dt) {
     eye[1] = Math.max(eye[1], surfaceAt(eye[0], eye[2]).h + 1.4);
     at = V3.add(V3.add(pos, V3.mul(dir, D * 0.9)), [0, hgt * 0.85, 0]); fov = 42; near = 0.5;
     cam.eye = eye;
-  } else if (mode === 'cockpit') {
+  } else if (CAM_EXT.includes(mode) && mode !== 'padlock' && !rkt) {
+    // fixed cameras on the airframe and around it
+    const mdl = G.models[a.key], span = Math.max(mdl.span || 10, 6), len = mdl.len || 15, R = v => V3.add(pos, Q.rot(st.q, v));
+    up = Q.rot(st.q, [0, 1, 0]); near = 0.25;
+    if (mode === 'wing') { eye = R([-len * 0.1, span * 0.04 + 0.45, span * 0.5 + 0.5]); at = R([len * 0.45, 0.1, span * 0.04]); fov = 60; }       // on the right wingtip, looking in along the jet
+    else if (mode === 'tail') { eye = R([-len * 0.55, span * 0.2 + 1.6, 0]); at = R([len * 0.55, span * 0.05, 0]); fov = 56; }                  // high behind the fins, over the whole airframe
+    else if (mode === 'nozzle') { eye = R([-len * 0.78, span * 0.03 + 0.35, span * 0.11]); at = R([-len * 0.12, 0.1, 0]); fov = 52; }           // low behind the jet, looking up the exhausts
+    else if (mode === 'belly') { eye = R([-len * 0.32, -span * 0.12 - 1.1, span * 0.05]); at = R([len * 0.35, -0.6, 0]); fov = 62; near = 0.15; } // under the fuselage: gear, bays and stores
+    else if (mode === 'side') {   // formation: off the right wing, slightly ahead, horizon level — a wingman's view
+      const fl = V3.norm([fwd[0], 0, fwd[2]]), rt = [-fl[2], 0, fl[0]], want = V3.add(pos, V3.add(V3.mul(rt, span * 1.6 + 7), V3.add(V3.mul(fl, len * 0.2), [0, span * 0.1, 0])));
+      if (!cam.init || !cam.rel) { cam.rel = V3.sub(want, pos); cam.init = true; }
+      cam.rel = V3.lerp(cam.rel, V3.sub(want, pos), Math.min(1, dt * 3)); eye = V3.add(pos, cam.rel); at = V3.add(pos, V3.mul(fl, len * 0.05)); up = [0, 1, 0]; fov = 46; near = 0.5;
+    } else {   // tower: the nearest airport's tower, a long lens zooming to keep the jet framed
+      const ap = nearestAirport(pos[0], pos[2]).ap, ang = (ap.hdg || 0) * D2R + Math.PI / 2, tp = [ap.x + Math.cos(ang) * 420, 0, ap.z + Math.sin(ang) * 420];
+      tp[1] = surfaceAt(tp[0], tp[2]).h + 32; eye = tp; at = pos; up = [0, 1, 0];
+      const dd = V3.len(V3.sub(pos, eye)); fov = clamp(2 * Math.atan(Math.max(span, len) * 1.6 / dd) / D2R, 0.8, 50); near = 2;
+    }
+    if (mode !== 'tower') eye[1] = Math.max(eye[1], surfaceAt(eye[0], eye[2]).h + 0.4);
+    cam.eye = eye; if (mode !== 'side') cam.init = false;
+  } else if (mode === 'cockpit' || mode === 'padlock') {
     const mdl = G.models[a.key], seat = mdl.eye || [1.3, 0.85, -0.35];
     // head motion: lean with g, buzz with rotor / engine, settle the look-around back to centre
     const buzz = (a.kind === 'heli' ? 0.006 * st.rpm : 0.0015 * st.rpm * (st.thr || 0)) * (st.onGround ? 0.5 : 1);
@@ -11534,9 +11608,16 @@ function updateCamera(dt) {
     const off = [Math.sin(t * 61) * buzz, lean + Math.sin(t * 47) * buzz, Math.sin(t * 53) * buzz * 0.6];
     eye = V3.add(pos, Q.rot(st.q, V3.add(seat, off)));
     if (!look.drag && performance.now() - look.last > 2500) { look.y *= Math.exp(-dt * 1.5); look.p *= Math.exp(-dt * 1.5); }
-    const ly = look.y, lp = look.p - (mdl.lookDown || 0.1);
+    let ly = look.y, lp = look.p - (mdl.lookDown || 0.1);
+    if (mode === 'padlock') {   // padlock: the pilot's head stays on the bandit (radar or seeker target, else the nearest other aircraft)
+      let tg = (typeof RADAR !== 'undefined' && RADAR.tgt) || SEEK.tgt;
+      if (!tg) { let bd = 25000; for (const o of AI.list) { if (o.dead) continue; const d = V3.len(V3.sub(o.p, pos)); if (d < bd) { bd = d; tg = o; } } }
+      if (tg) { const l = Q.inv(st.q, V3.norm(V3.sub(tg.p, eye))), hy = Math.atan2(l[2], l[0]), hp = Math.asin(clamp(l[1], -1, 1));
+        cam.plY = cam.plY == null ? hy : lerp(cam.plY, hy, Math.min(1, dt * 4)); cam.plP = cam.plP == null ? hp : lerp(cam.plP, hp, Math.min(1, dt * 4));
+        ly = clamp(cam.plY, -2.6, 2.6); lp = clamp(cam.plP, -0.6, 1.4); }   // neck limits
+    } else cam.plY = cam.plP = null;
     at = V3.add(eye, Q.rot(st.q, [Math.cos(lp) * Math.cos(ly), Math.sin(lp), Math.cos(lp) * Math.sin(ly)]));
-    up = Q.rot(st.q, [0, 1, 0]); fov = 74; near = 0.06;
+    up = Q.rot(st.q, [0, 1, 0]); fov = mdl.ckFov || 74; near = 0.06;
     cam.eye = eye; cam.init = false;
   } else if (mode === 'orbit' || mode === 'show') {
     if (mode === 'show') cam.orbY += dt * 0.15;
@@ -11647,7 +11728,7 @@ function aircraftDrawList(st, c, mdl) {
   const a = st.acd, M = M4.fromQP(st.q, st.pos), solid = [], late = [];
   const sv = { hook: st.hookK || 0, flap: st.flapPos || 0, roll: c.roll, pitch: st.elev != null ? st.elev : c.pitch + st.trim * 0.35, yaw: c.yaw, prop: st.prop, rpm: st.rpm, noz: st.noz, thr: c.thr, gear: st.gear, abrk: st.abrk || 0, mach: st.mach || 0,
     comp: st.comp || [], canopy: st.canopy || 0, fold: st.fold || 0, lights: st.lights, t: performance.now() / 1000, engine: st.engine,
-    inside: camMode === 'cockpit' && appState !== 'menu', stores: st.stores, st };
+    inside: inCk() && appState !== 'menu', stores: st.stores, st };
   const eyeZ = mdl.eye ? mdl.eye[2] : 99;
   for (const n in mdl.pieces) { const pc = mdl.pieces[n], pdk = st.pdmg && st.pdmg[n] || 0; if (pc.mesh && !st.lost[n]) solid.push(pdk > 0.12 ? [pc.mesh, M, { tint: scorchTint(null, pdk) }] : [pc.mesh, M]); }
   for (const pt of mdl.parts) {
@@ -11728,7 +11809,7 @@ function drawRain(g, VP, W, H) {
     g.strokeStyle = `rgba(210,220,235,${(0.12 + 0.22 * near)})`; g.lineWidth = 0.6 + near * 1.2;
     g.beginPath(); g.moveTo(a[0], a[1]); g.lineTo(b[0], b[1]); g.stroke();
   }
-  if (camMode === 'cockpit') { const sp = V3.len(camV); g.fillStyle = 'rgba(220,230,240,0.18)';   // beads on the canopy, swept back at speed
+  if (inCk()) { const sp = V3.len(camV); g.fillStyle = 'rgba(220,230,240,0.18)';   // beads on the canopy, swept back at speed
     for (let i = 0; i < 40; i++) { const x = (hash2(i, Math.floor(t * (0.5 + sp * 0.02))) * W), y = hash2(i + 9, Math.floor(t * 0.7)) * H * 0.7; g.beginPath(); g.ellipse(x, y, 1.5, 1.5 + Math.min(8, sp * 0.05), 0, 0, 6.3); g.fill(); } }
   g.restore();
   return 1;
@@ -11844,24 +11925,24 @@ function acGlows(st, mdl, list, showAc) {
   DYNG.length = 0;
   if (!showAc || st.crashed || !st.lights || !mdl.lights || !mdl.lights.pos) return;
   const Lt = mdl.lights, M = list.M, t = performance.now() / 1000;
-  const day = 0.22 + 0.78 * clamp(env.lightK * 1.4 + (env.night ? 1 : 0), 0, 1);   // steady lights wash out in daylight
+  const day = 0.05 + 0.95 * clamp(env.lightK * 1.4 + (env.night ? 1 : 0), 0, 1);   // steady lights all but vanish in daylight, as real ones do
   const gM = Lt.gp ? partMatrix(M, Lt.gp, list.sv) : M, rM = Lt.rp ? partMatrix(M, Lt.rp, list.sv) : M;
   const fw = mpt(M, [1, 0, 0]), o = mpt(M, [0, 0, 0]), fwd = V3.norm([fw[0] - o[0], 0, fw[2] - o[2]]);
   const P = (m, p, size, c, k, dir) => DYNG.push([...mpt(m, p), size, c[0] * k, c[1] * k, c[2] * k, dir ? dir[0] : 0, dir ? dir[2] : 0, 0]);
-  if (!st.lost.wingR) P(gM, Lt.pos.g, 1700, [0.15, 1, 0.35], day);
-  if (!st.lost.wingL) P(rM, Lt.pos.r, 1700, [1, 0.12, 0.08], day);
-  if (!st.lost.tail && !st.lost.boom) P(M, Lt.pos.w, 1500, [1, 1, 1], day * 0.8);
-  const bf = Math.exp(-((t * 1.15) % 1) * 12);
-  if (bf > 0.03) P(M, Lt.pos.b, 2200 * (1 + bf * 0.5), [1, 0.12, 0.06], bf * 2.2);
+  if (!st.lost.wingR) P(gM, Lt.pos.g, 760, [0.15, 1, 0.35], day * 0.85);
+  if (!st.lost.wingL) P(rM, Lt.pos.r, 760, [1, 0.12, 0.08], day * 0.85);
+  if (!st.lost.tail && !st.lost.boom) P(M, Lt.pos.w, 640, [1, 1, 1], day * 0.6);
+  const bf = Math.exp(-((t * 1.15) % 1) * 14);
+  if (bf > 0.03 && !Lt.noBeacon) P(M, Lt.pos.b, 1100 * (1 + bf * 0.3), [1, 0.12, 0.06], bf * (0.6 + 0.9 * day));
   if (!Lt.extra) return;
   const sp = t % 1.25, strobe = (sp < 0.05 ? 1 : 0) + (sp > 0.13 && sp < 0.18 ? 1 : 0);
   for (const e of Lt.extra) {
     if (e.gear && st.gear < 0.95) continue;
     if (e.wing && st.lost[e.wing > 0 ? 'wingR' : 'wingL']) continue;
     const m = e.wing > 0 ? gM : e.wing < 0 ? rM : M;
-    if (e.k === 'acl') { const f = Math.exp(-((t * 1.15 + e.ph) % 1) * 12); if (f > 0.03) P(m, e.p, 2600 * (1 + f * 0.5), e.c, f * 2.4); }
-    else if (e.k === 'strobe') { if (strobe) P(m, e.p, 5200, e.c, 3); }
-    else if (e.k === 'form') P(m, e.p, 650, e.c, 0.55 * clamp(env.lightK * 1.6, 0.05, 1));
+    if (e.k === 'acl') { const f = Math.exp(-((t * 1.15 + e.ph) % 1) * 14); if (f > 0.03) P(m, e.p, 1150 * (1 + f * 0.3), e.c, f * (0.6 + 0.9 * day)); }
+    else if (e.k === 'strobe') { if (strobe) P(m, e.p, 1300, e.c, 0.35 + 0.75 * day); }
+    else if (e.k === 'form') { const n = clamp(env.lightK * 1.6, 0, 1); if (n > 0.05) P(m, e.p, 300, e.c, 0.35 * n); }   // formation strips: dim, night only
     else if (e.k === 'aoa') { const a = (st.alpha || 0) / D2R, k = a < 9.5 ? 'green' : a < 12.5 ? 'amber' : 'red', c = { green: [0.2, 1, 0.4], amber: [1, 0.65, 0.1], red: [1, 0.12, 0.06] }[k]; P(m, e.ys ? [e.p[0], e.ys[k], e.p[2]] : e.p, 700, c, day * 1.1, fwd); }
     else if (e.k === 'land') P(m, e.p, e.size, e.c, 1.6 * day, fwd);
     else if (e.k === 'hover') { if (st.noz > 0.4 || st.vtolMode) P(m, e.p, e.size, e.c, 1.2 * day); }
@@ -11881,9 +11962,9 @@ function render() {
   gl.clearStencil(0);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
   // in a built flight deck the cabin is drawn in its own pass (below), so the scenery can keep a far-sighted near plane
-  const ckPass = camMode === 'cockpit' && appState !== 'menu' && !SIM.st.crashed && !!G.models[SIM.st.acd.key].eye;
+  const ckPass = inCk() && appState !== 'menu' && !SIM.st.crashed && !!G.models[SIM.st.acd.key].eye;
   // high up, push the near plane out (but never past the aircraft) so distant ground, sea and city keep their depth precision
-  const nearHi = camMode === 'cockpit' && appState !== 'menu' ? 0.3 : camMode === 'weapon' ? 4 : clamp(Math.min(cam.eye[1] * 0.0012, V3.len(V3.sub(cam.eye, SIM.st.pos)) * 0.4), 4, 40);
+  const nearHi = inCk() && appState !== 'menu' ? 0.3 : camMode === 'weapon' ? 4 : clamp(Math.min(cam.eye[1] * 0.0012, V3.len(V3.sub(cam.eye, SIM.st.pos)) * 0.4), 4, 40);
   const nearA = ckPass ? Math.max(0.8, cam.eye[1] > 5000 ? 4 : 0.8) : Math.max(cam.near, cam.eye[1] > 5000 ? nearHi : cam.near);
   // high up, the scenery gets its own pass with a near plane far out in front (land, sea and city then have depth to
   // spare and stop fighting each other); the aircraft and everything else in the air are drawn after on fresh depth
@@ -11922,8 +12003,8 @@ function render() {
   for (const t of G.terrain) draw(t, I, { mode: 4 });
   gl.disable(gl.POLYGON_OFFSET_FILL);
   draw(G.sea, seaM, { mode: 1, fogMul: 0.35, alpha: 0.999 });
-  const inCk = camMode === 'cockpit' && appState !== 'menu', hasCk = !!G.models[st.acd.key].eye;
-  const showAc = !inCk || hasCk;
+  const inCkV = inCk() && appState !== 'menu', hasCk = !!G.models[st.acd.key].eye;
+  const showAc = !inCkV || hasCk;
   let list = { solid: [], late: [] };
   if (!st.crashed) list = aircraftDrawList(st, c, mdl);
   // aircraft self-shadow from the sun (close views only)
@@ -11997,7 +12078,7 @@ function render() {
     if (!st.lost.wingR) draw(Lt.g, Lt.gp ? partMatrix(M, Lt.gp, list.sv) : M, { unlit: 1 });
     if (!st.lost.tail && !st.lost.boom) draw(Lt.w, M, { unlit: 1 });
     { const t = performance.now() / 1000, fl = ph => Math.exp(-((t * 1.15 + ph) % 1) * 12) > 0.25;   // anti-collision flashes, in step with their glow
-      if (fl(0)) draw(Lt.b, M, { unlit: 1 }); if (Lt.bb && fl(0.5)) draw(Lt.bb, M, { unlit: 1 }); }
+      if (fl(0) && !Lt.noBeacon) draw(Lt.b, M, { unlit: 1 }); if (Lt.bb && fl(0.5)) draw(Lt.bb, M, { unlit: 1 }); }
     if (Lt.xF) { const k = 0.6 + 0.4 * clamp(env.lightK * 1.5, 0, 1), tn = [k, k, k];   // formation panels are dim by day
       draw(Lt.xF, M, { unlit: 1, tint: tn }); if (!st.lost.wingR) draw(Lt.xR, partMatrix(M, Lt.gp, list.sv), { unlit: 1, tint: tn }); if (!st.lost.wingL) draw(Lt.xL, partMatrix(M, Lt.rp, list.sv), { unlit: 1, tint: tn }); }
   }
@@ -12079,7 +12160,8 @@ function render() {
         case 'teb': c = [0.3, 1, 0.38]; a = 0.55 * Math.min(1, k * 2); add = true; break;
         case 'drip': c = [0.72, 0.76, 0.8]; a = 0.7; break;
         case 'rglow': c = [1, 0.5, 0.18]; a = 0.3 * Math.min(1, k * 2.5); add = true; break;
-        case 'vapor': c = [1, 1, 1]; a = 0.35 * Math.min(1, k * 3); break;
+        case 'vapor': c = [1, 1, 1]; a = 0.3 * Math.min(1, k * 3); break;
+        case 'vtx': c = [0.97, 0.98, 1]; a = 0.3 * Math.min(1, k * 1.6) * Math.min(1, u * 8 + 0.3); break;   // vortex core trails: thin, fading out behind the tip
         case 'vent': c = [0.96, 0.97, 1]; a = 0.24 * Math.min(1, k * 2) * Math.min(1, u * 6 + 0.2); break;
         case 'steam': c = [0.93, 0.93, 0.94]; a = 0.42 * Math.min(1, k * 2) * Math.min(1, u * 5 + 0.25); break;
         case 'rtrail': c = [0.86, 0.86, 0.87]; a = 0.26 * Math.min(1, k * 1.5) * Math.min(1, u * 4 + 0.3); break;
@@ -12127,7 +12209,7 @@ function render() {
     // cinema grade warms up near sunrise and sunset; the picture streaks when you are low and fast
     const st_ = SIM.st, agl_ = st_.pos[1] - terrainH(st_.pos[0], st_.pos[2]);
     const warm = env.sunUp && !env.night ? clamp(1 - env.sunDir[1] * 3.2, 0, 1) : 0;
-    const spd = appState === 'fly' && camMode !== 'orbit' ? clamp(((st_.tas || 0) - 90) / 260, 0, 1) * clamp(1 - agl_ / 260, 0, 1) * (camMode === 'cockpit' ? 0.6 : 1) : 0;
+    const spd = appState === 'fly' && camMode !== 'orbit' ? clamp(((st_.tas || 0) - 90) / 260, 0, 1) * clamp(1 - agl_ / 260, 0, 1) * (inCk() ? 0.6 : 1) : 0;
     postEnd(sun, sunK, !!env.night, W / H, warm, spd);
   }
 }
@@ -12308,7 +12390,7 @@ function rocketHUD(st, c) {
 const adi = $('adi').getContext('2d');
 function drawADI() {
   const st = SIM.st, s = 148, r = s / 2;
-  $('adi').style.visibility = camMode === 'cockpit' && appState === 'fly' && ckReal(G.models[st.acd.key]) ? 'hidden' : '';
+  $('adi').style.visibility = inCk() && appState === 'fly' && ckReal(G.models[st.acd.key]) ? 'hidden' : '';
   adi.save(); adi.clearRect(0, 0, s, s);
   adi.beginPath(); adi.arc(r, r, r, 0, 7); adi.clip();
   adi.translate(r, r); adi.rotate(-st.rollAng);
@@ -12621,7 +12703,8 @@ function toggleEngine() {
   updSys();
 }
 function trim(d) { const st = SIM.st, r = st.acd.airliner ? 2.85 : 1; st.trim = clamp(st.trim + d, -r, r); updSys(); }
-function cycleCam() { camMode = CAMS[(CAMS.indexOf(camMode) + 1) % CAMS.length]; $('dash').style.display = camMode === 'cockpit' && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; $('bCamV').textContent = { chase: 'CHASE', follow: 'FOLLOW', cockpit: SIM.st.rk ? 'ONBOARD' : 'CKPT', orbit: 'ORBIT', flyby: SIM.st.rk ? 'TRACK' : 'FLYBY' }[camMode]; cam.init = false; flyby.p = null; if (camMode === 'orbit') ui.toast('Orbit camera', 'Drag to look around · pinch or use + − to zoom'); orbUI(); }
+function cycleCam() { do { camMode = CAMS[(CAMS.indexOf(camMode) + 1) % CAMS.length]; } while (SIM.st.rk && CAM_EXT.includes(camMode)); if (camMode === 'padlock' && !G.models[SIM.st.acd.key].eye) camMode = 'wing';
+  $('dash').style.display = inCk() && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; $('bCamV').textContent = SIM.st.rk ? { chase: 'CHASE', follow: 'FOLLOW', cockpit: 'ONBOARD', orbit: 'ORBIT', flyby: 'TRACK' }[camMode] : CAM_LAB[camMode]; cam.init = false; flyby.p = null; if (camMode === 'orbit') ui.toast('Orbit camera', 'Drag to look around · pinch or use + − to zoom'); orbUI(); }
 let orbShown = null;
 function orbUI() { const v = camMode === 'orbit' && appState === 'fly' && !IMP.on; if (v === orbShown) return; orbShown = v; const z = $('zoomBox'); if (z) z.style.display = v ? 'flex' : 'none'; }
 
@@ -12698,7 +12781,7 @@ function menuRender() {
 }
 let menuT = 0;
 function openMenu() { voxStop(); document.body.classList.add('inmenu'); menuT = performance.now(); $('wpn').style.display = 'none'; $('dash').style.display = 'none'; SIM.paused = appState === 'fly' && !SIM.st.crashed; appState = 'menu'; $('sys').classList.remove('open'); menuRender(); $('menu').classList.remove('hidden'); }
-function closeMenu() { document.body.classList.remove('inmenu'); $('dash').style.display = camMode === 'cockpit' && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; appState = 'fly'; SIM.paused = false; $('menu').classList.add('hidden'); applyAircraftUI(); }
+function closeMenu() { document.body.classList.remove('inmenu'); $('dash').style.display = inCk() && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; appState = 'fly'; SIM.paused = false; $('menu').classList.add('hidden'); applyAircraftUI(); }
 
 // ---------------- main loop ----------------
 let last = performance.now(), acc = 0;
@@ -12729,7 +12812,7 @@ function frame(now) {
   updateCamera(dt);
   rebuildSkids();
   render();
-  audioUpdate(dt, V3.len(V3.sub(cam.eye, SIM.st.crashed && SIM.st.crashed.main ? SIM.st.crashed.main.pos : SIM.st.pos)), camMode === 'cockpit' && appState === 'fly', appState === 'fly' && !portrait);
+  audioUpdate(dt, V3.len(V3.sub(cam.eye, SIM.st.crashed && SIM.st.crashed.main ? SIM.st.crashed.main.pos : SIM.st.pos)), inCk() && appState === 'fly', appState === 'fly' && !portrait);
   if (appState === 'fly') updateHUD(dt);
   orbUI();
   requestAnimationFrame(frame);
@@ -12739,11 +12822,45 @@ init();
 
 // ---------------- cockpit displays (painted into the screen texture) ----------------
 let scrT = 0;
+// F-22 pages 3-5: lower SMFD (stores management), left up-front display (ICAW / comm-nav), right up-front display (standby flight + fuel)
+function f22Pages(g, st, txt, C, hdg, kt, alt, vs) {
+  const { A, CY, AM, RD, WH } = C, S = st.stores || { m: [], r: [], b: [] }, U = CFG.unlimitedWpn;
+  // ---- page 3: SMS — the bays seen from below, missiles lit when loaded, the gun and its rounds
+  { const ox = 768; g.save(); g.translate(ox, 0); g.fillStyle = '#04070a'; g.fillRect(0, 0, 256, 256);
+    txt('SMS', 10, 20, CY, 13, 'left'); txt(S.lo === 'ag' ? 'A/G LOAD' : 'A/A LOAD', 246, 20, WH, 13, 'right');
+    g.strokeStyle = '#3a4654'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(128, 30); g.lineTo(170, 120); g.lineTo(236, 150); g.lineTo(236, 170); g.lineTo(150, 175); g.lineTo(150, 215); g.lineTo(106, 215); g.lineTo(106, 175); g.lineTo(20, 170); g.lineTo(20, 150); g.lineTo(86, 120); g.closePath(); g.stroke();
+    const msl = (x, y, ok, lab, col) => { g.fillStyle = ok ? col : '#1e2630'; g.fillRect(x - 3, y - 18, 6, 36); g.fillRect(x - 6, y + 12, 12, 4); txt(lab, x, y + 32, ok ? col : '#5a6878', 10); };
+    if (S.r) [[97, 0], [113, 1], [121, 2], [135, 3], [143, 4], [159, 5]].forEach(([x, i]) => msl(x, i === 1 || i === 4 ? 120 : 130, U || S.r[i], i === 1 || i === 4 ? '' : '120', A));
+    msl(70, 112, U || S.m[0], '9X', AM); msl(186, 112, U || S.m[1], '9X', AM);
+    if (S.lo === 'ag') { for (const [x, i] of [[108, 0], [148, 1]]) { g.fillStyle = U || S.b[i] ? CY : '#1e2630'; g.fillRect(x - 6, 150, 12, 26); } txt('GBU-32', 128, 196, CY, 10); }
+    txt(`GUN ${U ? '∞' : st.ammo || 0}`, 10, 238, WH, 14, 'left');
+    txt((st.sbdK || 0) > 0.05 || (st.mbdK || 0) > 0.05 ? 'BAYS OPEN' : 'BAYS SHUT', 246, 238, (st.sbdK || 0) > 0.05 || (st.mbdK || 0) > 0.05 ? AM : '#8fa1b3', 13, 'right');
+    g.restore(); }
+  // ---- page 4: left UFD — integrated caution / advisory / warning list and comm / nav (3 x 4 in, drawn in the middle band)
+  { const ox = 1024; g.save(); g.translate(ox, 0); g.fillStyle = '#04070a'; g.fillRect(0, 0, 256, 256);
+    const w = []; if (st.fuel < st.acd.fuelMax * 0.15) w.push(['FUEL LOW', RD]); if ((st.brakeT || 0) > 420) w.push(['BRAKE HOT', AM]);
+    if (st.fail && st.fail.length) for (const f of st.fail) w.push([String(f.n || f).toUpperCase().slice(0, 14), AM]);
+    if (SIM.proj.some(p => p.enemy)) w.push(['MISSILE LAUNCH', RD]); if (Math.abs(st.g || 1) > 8.5) w.push(['OVER G', RD]);
+    if (st.hiAoA) w.push(['HI AOA MODE', CY]); if (st.gear > 0.01 && st.ias > 140) w.push(['GEAR SPEED', AM]);
+    txt('ICAW', 12, 58, CY, 14, 'left'); txt('UHF 251.0', 244, 58, WH, 14, 'right');
+    (w.length ? w : [['NO FAULTS', A]]).slice(0, 4).forEach(([t2, col], k) => txt(t2, 12, 84 + k * 19, col, 15, 'left'));
+    txt(`TCN 41X`, 244, 84, WH, 13, 'right'); txt(`IFF 4`, 244, 103, A, 13, 'right');
+    g.restore(); }
+  // ---- page 5: right UFD — standby attitude, airspeed and altitude, fuel quantity
+  { const ox = 1280; g.save(); g.translate(ox, 0); g.fillStyle = '#04070a'; g.fillRect(0, 0, 256, 256);
+    g.save(); g.beginPath(); g.rect(84, 48, 88, 88); g.clip(); g.translate(128, 92); g.rotate(-st.rollAng); const py = st.pitchAng / D2R * 2;
+    g.fillStyle = '#2b78c2'; g.fillRect(-90, -180 + py, 180, 180); g.fillStyle = '#7a4e2c'; g.fillRect(-90, py, 180, 180); g.strokeStyle = '#fff'; g.beginPath(); g.moveTo(-90, py); g.lineTo(90, py); g.stroke(); g.restore();
+    g.strokeStyle = AM; g.lineWidth = 2; g.beginPath(); g.moveTo(108, 92); g.lineTo(122, 92); g.moveTo(134, 92); g.lineTo(148, 92); g.stroke();
+    txt(String(Math.round(kt)), 44, 98, WH, 17); txt('KIAS', 44, 120, '#8fb0cc', 11);
+    txt(String(Math.round(alt / 10) * 10), 212, 98, WH, 17); txt('FT', 212, 120, '#8fb0cc', 11);
+    txt(`FUEL ${Math.round(st.fuel * 2.2046)} LB`, 128, 172, st.fuel < st.acd.fuelMax * 0.15 ? RD : '#c9a8ff', 15);
+    g.restore(); }
+}
 function screensPaint(st) {
   const now = performance.now(); if (now - scrT < 80) return; scrT = now;
   if (!SCR.ok) return;
   const g = SCR.ctx, a = st.acd, c = SIM.ctl, on = st.engine || st.rpm > 0.05;
-  g.save(); g.fillStyle = '#05080c'; g.fillRect(0, 0, 1024, 256);
+  g.save(); g.fillStyle = '#05080c'; g.fillRect(0, 0, 1536, 256);
   if (!on) { g.restore(); screensUpload(); return; }
   const f = Q.rot(st.q, [1, 0, 0]), hdg = (Math.atan2(f[0], -f[2]) / D2R + 360) % 360;
   const kt = st.ias * KT, alt = st.pos[1] * FT, vs = st.vel[1] * 60 * FT;
@@ -12861,12 +12978,14 @@ function screensPaint(st) {
       g.strokeStyle = '#3a4654'; g.beginPath(); g.moveTo(8, 186); g.lineTo(248, 186); g.stroke();
       txt(ab > 0.01 ? 'AB ' + Math.round(ab * 100) + '%' : on ? ((st.mach || 0) >= 1 ? 'SUPERCRUISE' : 'MIL') : 'ENG OFF', 10, 206, ab > 0.01 ? AM : A, 15, 'left');
       txt(`FUEL ${Math.round(st.fuel)} KG`, 246, 206, st.fuel < a.fuelMax * 0.15 ? RD : '#c9a8ff', 14, 'right');
-      const sm = st.stores ? (CFG.unlimitedWpn ? '∞' : st.stores.m.filter(Boolean).length) : 0, sb = st.stores ? (CFG.unlimitedWpn ? '∞' : st.stores.b.filter(Boolean).length) : 0;
-      txt(`AIM-9X ${sm}  ·  GBU-32 ${sb}`, 10, 228, WH, 13, 'left');
+      const sm = st.stores ? (CFG.unlimitedWpn ? '∞' : st.stores.m.filter(Boolean).length) : 0, sb = st.stores ? (CFG.unlimitedWpn ? '∞' : st.stores.b.filter(Boolean).length) : 0, sr = st.stores && st.stores.r ? (CFG.unlimitedWpn ? '∞' : st.stores.r.filter(Boolean).length) : 0;
+      txt(`120 ${sr} · 9X ${sm}` + (st.stores && st.stores.lo === 'ag' ? ` · JDAM ${sb}` : ''), 10, 228, WH, 13, 'left');
       txt((st.sbdK || 0) > 0.05 || (st.mbdK || 0) > 0.05 ? 'BAYS OPEN' : 'BAYS SHUT', 246, 228, (st.sbdK || 0) > 0.05 || (st.mbdK || 0) > 0.05 ? AM : '#8fa1b3', 13, 'right');
       txt(`${(st.g || 1).toFixed(1)} G  AOA ${Math.round((st.alpha || 0) / D2R)}°`, 10, 250, Math.abs(st.g || 1) > 8 ? RD : CY, 13, 'left');
       txt(st.gear > 0.99 ? 'GEAR DN' : st.gear < 0.01 ? 'GEAR UP' : 'GEAR ···', 246, 250, st.gear > 0.99 ? A : st.gear < 0.01 ? '#8fa1b3' : AM, 13, 'right');
-      g.restore(); g.restore(); screensUpload(); return;
+      g.restore();
+      f22Pages(g, st, txt, { A, CY, AM, RD, WH }, hdg, kt, alt, vs);
+      g.restore(); screensUpload(); return;
     }
     if (a.airliner) {   // Boeing engine display: N1 and EGT round dials for both engines, fuel flow, flaps and gear
       g.save(); g.translate(ox, 0); g.fillStyle = '#05080c'; g.fillRect(0, 0, 256, 256);
@@ -12921,7 +13040,7 @@ function screensPaint(st) {
 const hudc = (() => { const cv = document.createElement('canvas'); cv.id = 'hudc'; cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;display:none'; document.body.appendChild(cv); return cv; })();
 function drawJetHUD(VP) {
   const st = SIM.st, mdl = G.models[st.acd.key];
-  const show = camMode === 'cockpit' && appState === 'fly' && mdl.hud && !st.crashed && (st.engine || st.rpm > 0.05);
+  const show = inCk() && appState === 'fly' && mdl.hud && !st.crashed && (st.engine || st.rpm > 0.05);
   const W = innerWidth, H = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
   if (hudc.width !== Math.round(W * dpr)) { hudc.width = Math.round(W * dpr); hudc.height = Math.round(H * dpr); }
   const g = hudc.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
@@ -12934,42 +13053,66 @@ function drawJetHUD(VP) {
   const hb = mdl.hud, cn = [[hb.y0, -hb.z], [hb.y0, hb.z], [hb.y1, hb.z], [hb.y1, -hb.z]].map(([y, z]) => proj(V3.norm(Q.rot(st.q, V3.sub([hb.x, y, z], mdl.eye)))));
   if (cn.some(v => !v)) return;
   const xs = cn.map(v => v[0]), ys = cn.map(v => v[1]), bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
-  ctr[0] = (Math.max(...xs) + Math.min(...xs)) / 2; ctr[1] = Math.min(...ys) + bh * 0.62;
+  const nose = ctr.slice();   // where the nose points (waterline); the layout centres on the combiner
+  ctr[0] = (Math.max(...xs) + Math.min(...xs)) / 2; ctr[1] = Math.min(...ys) + bh * 0.55;
   g.save(); g.beginPath(); g.moveTo(cn[0][0], cn[0][1]); for (const v of cn.slice(1)) g.lineTo(v[0], v[1]); g.closePath(); g.clip();
-  g.strokeStyle = 'rgba(120,255,160,0.95)'; g.fillStyle = 'rgba(120,255,160,0.95)'; g.lineWidth = 1.6; g.shadowColor = 'rgba(80,255,140,0.8)'; g.shadowBlur = 4;
-  const fs = clamp(bw / 16, 8, 14); g.font = `600 ${fs}px Rajdhani, sans-serif`; g.textAlign = 'center';
+  // F-22 style symbology: thin green strokes, airspeed and altitude boxes, heading tape, pitch ladder, flight path marker,
+  // waterline, bank scale, and the weapon / mode lines. Collimated: drawn at infinity, so it stays on the horizon as the head moves.
+  const GR = 'rgba(110,255,150,0.95)';
+  g.strokeStyle = GR; g.fillStyle = GR; g.lineWidth = Math.max(1.1, bw / 300); g.shadowColor = 'rgba(70,255,130,0.55)'; g.shadowBlur = 2.5;
+  const fs = clamp(bw / 22, 8, 15); g.font = `600 ${fs}px Rajdhani, sans-serif`; g.textAlign = 'center';
   const f = Q.rot(st.q, [1, 0, 0]), hd = Math.atan2(f[0], -f[2]), hz = V3.norm([f[0], 0, f[2]]);
-  // pitch ladder: lines at fixed world elevation, tilted with the bank
-  for (let p = -30; p <= 30; p += 5) {
+  // pitch ladder every 5°: climb bars solid with ends bent toward the horizon, dive bars dashed and angled
+  for (let p = -85; p <= 85; p += 5) {
     const e = p * D2R, d = [hz[0] * Math.cos(e), Math.sin(e), hz[2] * Math.cos(e)], s = proj(d); if (!s) continue;
-    const ang = st.rollAng, w = p ? bw * 0.13 : bw * 0.5, gap = p ? bw * 0.05 : 0;
+    if (Math.hypot(s[0] - ctr[0], s[1] - ctr[1]) > bh * 0.75) continue;
+    const ang = st.rollAng, w = p ? bw * 0.11 : bw * 0.42, gap = p ? bw * 0.045 : bw * 0.04, tk = fs * 0.55;
     g.save(); g.translate(s[0], s[1]); g.rotate(-ang);
-    g.setLineDash(p < 0 ? [6, 5] : []);
-    g.beginPath(); g.moveTo(-w, 0); g.lineTo(-gap, 0); g.moveTo(gap, 0); g.lineTo(w, 0);
-    if (p) { g.moveTo(-w, 0); g.lineTo(-w, p > 0 ? 6 : -6); g.moveTo(w, 0); g.lineTo(w, p > 0 ? 6 : -6); }
-    g.stroke(); g.setLineDash([]);
-    if (p) { g.fillText(Math.abs(p), -w - fs, fs * 0.35); g.fillText(Math.abs(p), w + fs, fs * 0.35); }
+    if (p < 0) { g.setLineDash([fs * 0.45, fs * 0.3]); g.rotate(0); }
+    const tilt = p < 0 ? Math.min(0.45, -p / 90 * 0.9) : 0;   // dive bars lean toward the horizon
+    g.beginPath(); g.moveTo(-w, -Math.sin(tilt) * w); g.lineTo(-gap, 0); g.moveTo(gap, 0); g.lineTo(w, -Math.sin(tilt) * w); g.stroke(); g.setLineDash([]);
+    if (p) { g.beginPath(); g.moveTo(-w, -Math.sin(tilt) * w); g.lineTo(-w, (p > 0 ? tk : -tk) - Math.sin(tilt) * w); g.moveTo(w, -Math.sin(tilt) * w); g.lineTo(w, (p > 0 ? tk : -tk) - Math.sin(tilt) * w); g.stroke();
+      g.textAlign = 'right'; g.fillText(Math.abs(p), -w - fs * 0.35, fs * 0.35 - Math.sin(tilt) * w); g.textAlign = 'left'; g.fillText(Math.abs(p), w + fs * 0.35, fs * 0.35 - Math.sin(tilt) * w); g.textAlign = 'center'; }
     g.restore();
   }
-  // flight-path marker (where the jet is actually going)
-  if (V3.len(st.vel) > 8) { const s = proj(V3.norm(st.vel)); if (s) { g.beginPath(); g.arc(s[0], s[1], 7, 0, 7); g.moveTo(s[0] - 17, s[1]); g.lineTo(s[0] - 7, s[1]); g.moveTo(s[0] + 7, s[1]); g.lineTo(s[0] + 17, s[1]); g.moveTo(s[0], s[1] - 7); g.lineTo(s[0], s[1] - 13); g.stroke(); } }
-  // boresight cross
-  g.beginPath(); g.moveTo(ctr[0] - 8, ctr[1]); g.lineTo(ctr[0] + 8, ctr[1]); g.moveTo(ctr[0], ctr[1] - 8); g.lineTo(ctr[0], ctr[1] + 8); g.stroke();
-  // speed, altitude, heading, nozzle, g
-  g.font = `600 ${fs * 1.25}px Rajdhani, sans-serif`; const bxw = fs * 3.6, bxh = fs * 1.6;
-  g.strokeRect(ctr[0] - bw * 0.46, ctr[1] - bxh / 2, bxw, bxh); g.fillText(Math.round(st.ias * KT), ctr[0] - bw * 0.46 + bxw / 2, ctr[1] + fs * 0.42);
-  g.strokeRect(ctr[0] + bw * 0.46 - bxw * 1.15, ctr[1] - bxh / 2, bxw * 1.15, bxh); g.fillText(Math.round(st.pos[1] * FT / 10) * 10, ctr[0] + bw * 0.46 - bxw * 0.575, ctr[1] + fs * 0.42);
+  // flight-path marker: circle with wings and a fin — where the jet is actually going
+  if (V3.len(st.vel) > 8) { const s = proj(V3.norm(st.vel)); if (s) { const r = fs * 0.45; g.beginPath(); g.arc(s[0], s[1], r, 0, 7);
+    g.moveTo(s[0] - r * 2.6, s[1]); g.lineTo(s[0] - r, s[1]); g.moveTo(s[0] + r, s[1]); g.lineTo(s[0] + r * 2.6, s[1]); g.moveTo(s[0], s[1] - r); g.lineTo(s[0], s[1] - r * 2); g.stroke(); } }
+  // waterline 'W': where the nose points
+  { const r = fs * 0.5, x = nose[0], y = nose[1]; g.beginPath(); g.moveTo(x - r * 2.2, y); g.lineTo(x - r * 1.1, y); g.lineTo(x - r * 0.55, y + r * 0.7); g.lineTo(x, y); g.lineTo(x + r * 0.55, y + r * 0.7); g.lineTo(x + r * 1.1, y); g.lineTo(x + r * 2.2, y); g.stroke(); }
+  // airspeed (left) and altitude (right) boxes, with Mach / angle of attack / G under the speed and radar altitude under the height
+  const L = ctr[0] - bw * 0.43, Rr = ctr[0] + bw * 0.43, by = ctr[1] - bh * 0.05, bxh = fs * 1.55;
+  g.font = `600 ${fs * 1.2}px Rajdhani, sans-serif`;
+  g.strokeRect(L - fs * 1.9, by - bxh / 2, fs * 3.8, bxh); g.fillText(Math.round(st.ias * KT), L, by + fs * 0.42);
+  g.strokeRect(Rr - fs * 2.5, by - bxh / 2, fs * 5, bxh); g.fillText((Math.round(st.pos[1] * FT / 10) * 10).toLocaleString('en-US'), Rr, by + fs * 0.42);
   g.font = `600 ${fs}px Rajdhani, sans-serif`;
-  const hdgDeg = (hd / D2R + 360) % 360;
-  for (let k = -3; k <= 3; k++) { const v = Math.round(hdgDeg / 10) * 10 + k * 10, x = ctr[0] + (v - hdgDeg) * bw * 0.012; g.beginPath(); g.moveTo(x, ctr[1] - bh * 0.56); g.lineTo(x, ctr[1] - bh * 0.56 + 6); g.stroke(); g.fillText(String(((v % 360) + 360) % 360 / 10 | 0).padStart(2, '0'), x, ctr[1] - bh * 0.56 + 20); }
-  g.beginPath(); g.moveTo(ctr[0], ctr[1] - bh * 0.56 + 24); g.lineTo(ctr[0] - 5, ctr[1] - bh * 0.56 + 31); g.lineTo(ctr[0] + 5, ctr[1] - bh * 0.56 + 31); g.closePath(); g.stroke();
-  g.textAlign = 'left';
-  g.fillText(`G ${st.g.toFixed(1)}`, ctr[0] - bw * 0.45, ctr[1] + bh * 0.16);
-  if (st.acd.vtol) g.fillText(`NOZ ${Math.round(st.noz / D2R)}°`, ctr[0] - bw * 0.45, ctr[1] + bh * 0.16 + 18);
-  g.textAlign = 'right';
-  g.fillText(`VS ${Math.round(st.vel[1] * 60 * FT / 10) * 10}`, ctr[0] + bw * 0.45, ctr[1] + bh * 0.16);
+  g.fillText(`M ${(st.mach || 0).toFixed(2)}`, L, by + bxh * 1.25); g.fillText(`α ${((st.alpha || 0) / D2R).toFixed(1)}`, L, by + bxh * 1.25 + fs * 1.2);
+  st.hudMaxG = Math.max(st.hudMaxG || 1, st.g || 1);
+  g.fillText(`${(st.g || 1).toFixed(1)} G`, L, by - bxh * 1.15);
+  g.fillText(`${Math.round(st.vel[1] * 60 * FT / 100) * 100}`, Rr, by - bxh * 1.15);
   const agl = st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h + st.acd.gear[0].p[1];
-  if (agl < 500) g.fillText(`R ${Math.max(0, Math.round(agl * FT))}`, ctr[0] + bw * 0.45, ctr[1] + bh * 0.16 + 18);
+  if (agl < 1500 / FT) g.fillText(`${Math.max(0, Math.round(agl * FT))} R`, Rr, by + bxh * 1.25);
+  // heading tape across the top: ticks every 5°, numbers every 10°, caret under the current heading
+  const hdgDeg = (hd / D2R + 360) % 360, ty = ctr[1] - bh * 0.5 + fs * 1.4, sc = bw * 0.0105;
+  for (let k = -6; k <= 6; k++) { const v = Math.round(hdgDeg / 5) * 5 + k * 5, x = ctr[0] + (v - hdgDeg) * sc; if (Math.abs(x - ctr[0]) > bw * 0.3) continue;
+    g.beginPath(); g.moveTo(x, ty); g.lineTo(x, ty - (v % 10 === 0 ? fs * 0.6 : fs * 0.3)); g.stroke();
+    if (v % 10 === 0) g.fillText(String(((v / 10) % 36 + 36) % 36).padStart(2, '0'), x, ty - fs * 0.8); }
+  g.beginPath(); g.moveTo(ctr[0], ty + 2); g.lineTo(ctr[0] - fs * 0.35, ty + fs * 0.55); g.lineTo(ctr[0] + fs * 0.35, ty + fs * 0.55); g.closePath(); g.stroke();
+  // bank scale at the bottom: ticks at 10, 20, 30, 45 and 60° with a pointer
+  { const cy = ctr[1] + bh * 0.06, rr = bh * 0.36;
+    for (const b of [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60]) { const a = Math.PI / 2 + b * D2R, l = b % 30 === 0 ? fs * 0.7 : fs * 0.4;
+      g.beginPath(); g.moveTo(ctr[0] + Math.cos(a) * rr, cy + Math.sin(a) * rr); g.lineTo(ctr[0] + Math.cos(a) * (rr + l), cy + Math.sin(a) * (rr + l)); g.stroke(); }
+    const a = Math.PI / 2 + clamp(st.rollAng, -1.1, 1.1); g.beginPath(); g.moveTo(ctr[0] + Math.cos(a) * (rr - 1), cy + Math.sin(a) * (rr - 1));
+    g.lineTo(ctr[0] + Math.cos(a) * (rr - fs * 0.6) + Math.cos(a + 1.57) * fs * 0.3, cy + Math.sin(a) * (rr - fs * 0.6) + Math.sin(a + 1.57) * fs * 0.3);
+    g.lineTo(ctr[0] + Math.cos(a) * (rr - fs * 0.6) - Math.cos(a + 1.57) * fs * 0.3, cy + Math.sin(a) * (rr - fs * 0.6) - Math.sin(a + 1.57) * fs * 0.3); g.closePath(); g.stroke(); }
+  // mode and weapons lines along the bottom; thrust state on the left
+  const S = st.stores, U = CFG.unlimitedWpn, yb = ctr[1] + bh * 0.5 - fs * 0.6;
+  g.textAlign = 'left'; g.fillText(st.ab > 0.01 ? 'AB' : (st.mach || 0) >= 1 && st.engine ? 'SPRCRZ' : st.engine ? 'MIL' : 'ENG', ctr[0] - bw * 0.46, yb);
+  if (st.hiAoA) g.fillText('HI-α', ctr[0] - bw * 0.46, yb - fs * 1.2);
+  g.textAlign = 'center';
+  if (S && S.r) g.fillText(`${S.lo === 'ag' ? 'A/G' : 'A/A'}  120 ${U ? '∞' : S.r.filter(Boolean).length}  9X ${U ? '∞' : S.m.filter(Boolean).length}  GUN ${U ? '∞' : st.ammo || 0}`, ctr[0], yb);
+  else if (S) g.fillText(`MSL ${U ? '∞' : S.m.filter(Boolean).length}  ${S.b.length ? 'BOMB ' + (U ? '∞' : S.b.filter(Boolean).length) : ''}`, ctr[0], yb);
+  if (st.acd.vtol) { g.textAlign = 'right'; g.fillText(`NOZ ${Math.round(st.noz / D2R)}°`, ctr[0] + bw * 0.46, yb); }
   g.restore();
 }
 
