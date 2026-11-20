@@ -4605,12 +4605,15 @@ function buildB2() {
   for (const sd of ['R', 'L']) {
     const sg = sd === 'R' ? 1 : -1, wing = sd === 'R' ? 'wingR' : 'wingL';
     // elevons: pitch together, roll differentially; the outer ones work hardest in roll
-    for (const [nm, kp, kr, pc] of [['elv1', 0.42, 0.18, 'fuse'], ['elv2', 0.34, 0.32, wing], ['elv3', 0.26, 0.42, wing]]) {
-      const m = META[nm + sd]; add(nm + sd, pc, m.pivot, m.axis, s => clamp(-pitchCmd(s) * kp - sg * rollCmd(s) * kr, -0.6, 0.6));
+    // all elevons sit drooped on the take-off roll until there's flying speed (Northrop); the inner pair work mostly at low speed
+    const droop = s => s.st.onGround ? 0.24 * clamp(1 - (s.st.tas || 0) / 70, 0, 1) : 0, lowK = s => clamp(1.4 - (s.st.tas || 0) / 140, 0.45, 1);
+    for (const [nm, kp, kr, pc, inner] of [['elv1', 0.42, 0.18, 'fuse', 1], ['elv2', 0.34, 0.32, wing, 1], ['elv3', 0.26, 0.42, wing, 0]]) {
+      const m = META[nm + sd]; add(nm + sd, pc, m.pivot, m.axis, s => clamp((-pitchCmd(s) * kp - sg * rollCmd(s) * kr) * (inner ? lowK(s) : 1) + droop(s), -0.6, 0.6));
     }
     // split drag rudders: the side you yaw toward splits open (drag pulls the nose round); both open as the speedbrake.
     // In cruise the fly-by-wire keeps them cracked a few degrees open for yaw damping, as the real aircraft does at low altitude
-    const open = s => clamp(Math.max(0, sg * yawCmd(s)) * 0.75 + (s.abrk || 0) * 0.75 + (s.st.onGround ? 0 : 0.04), 0, 0.85);
+    // and at low speed (approach, landing) the drag rudders stay open for yaw stability
+    const open = s => clamp(Math.max(0, sg * yawCmd(s)) * 0.75 + (s.abrk || 0) * 0.75 + (s.st.onGround ? 0 : 0.04 + 0.16 * clamp((140 - (s.st.tas || 0)) / 45, 0, 1)), 0, 0.85);
     const m = META['drU' + sd];
     add('drU' + sd, wing, m.pivot, m.axis, s => -open(s) - sg * rollCmd(s) * 0.12);
     add('drL' + sd, wing, m.pivot, m.axis, s => open(s) - sg * rollCmd(s) * 0.12);
@@ -5448,10 +5451,11 @@ function buildHeli() {
   const parts = [];
   let m = AMB(); m.box([0, 2.22, 0], [10, 0.06, 0.3], DK);
   for (const sgn of [1, -1]) m.cyl([0.25 * sgn, 1.95, 0], [0.35 * sgn, 2.18, 0], 0.02, 0.02, 4, MET);   // pitch links
-  parts.push(part(m, [0, 2.22, 0], [0, 1, 0], s => s.prop, { piece: 'rotor' }));
+  const cyc = [{ pivot: [0, 2.22, 0], axis: [0, 0, 1], angle: s => clamp(s.pitch, -1, 1) * 0.08 }, { pivot: [0, 2.22, 0], axis: [1, 0, 0], angle: s => clamp(s.roll, -1, 1) * 0.08 }];   // cyclic tilts the rotor disc
+  parts.push(part(m, [0, 2.22, 0], [0, 1, 0], s => s.prop, { piece: 'rotor', outer: cyc }));
   pb.addDebris('rotor', (() => { const d = AMB(); d.box([0, 2.22, 0], [10, 0.06, 0.3], DK); return d; })());
   m = AMB(); m.cyl([0, 2.2, 0], [0, 2.24, 0], 5, 5, 20, DK);
-  parts.push(part(m, [0, 2.22, 0], [0, 1, 0], () => 0, { piece: 'rotor', alpha: s => s.rpm > 0.3 ? 0.13 : 0, twoSided: true }));
+  parts.push(part(m, [0, 2.22, 0], [0, 1, 0], () => 0, { piece: 'rotor', outer: cyc, alpha: s => s.rpm > 0.3 ? 0.13 : 0, twoSided: true }));
   m = AMB(); m.box([-6.15, 1.25, -0.22], [0.2, 1.4, 0.04], DK);
   parts.push(part(m, [-6.15, 1.25, -0.22], [0, 0, 1], s => s.prop * 3.1, { piece: 'boom' }));
   return { parts, pieces: pb.build({ fuse: 0.7, boom: 0.12, skids: 0.06, rotor: 0.12 }),
@@ -5648,7 +5652,7 @@ const AC = {
     // two F119s: about 116 kN dry and 156 kN in reheat each; ram recovery lets dry thrust supercruise past Mach 1.5
     thrust: (thr, V, h, M = 0) => {
       const st = SIM.st, sig = airRho(h) / 1.225, ram = 1 + 0.32 * Math.min(M, 1.7) - 0.25 * Math.max(0, M - 1.9);
-      return (209000 * Math.min(1, thr / 0.85) + 103000 * (st.ab || 0)) * Math.pow(sig, 0.72) * ram;   // 2 × 23,500 lbf dry, 2 × 35,000 lbf wet
+      return (232000 * Math.min(1, thr / 0.85) + 80000 * (st.ab || 0)) * Math.pow(sig, 0.72) * ram;   // 2 × 26,000 lbf dry, 2 × 35,000 lbf wet (USAF)
     },
     // transonic drag rise, then falling wave drag: total drag ~0.015-0.02 supercruising at Mach 1.5-1.8; climbs steeply past Mach 2.2
     machDrag: M => M < 0.85 ? 0 : M < 1.15 ? 0.0115 * smooth(0.85, 1.15, M) : 0.0115 * Math.pow(1.15 / M, 0.6) + 0.12 * Math.max(0, M - 2.2) ** 2,
@@ -5666,7 +5670,7 @@ const AC = {
       { p: [-4.1, 3.15, 3.0], piece: 'tail', kind: 'tail', n: 'Fin' }, { p: [-4.1, 3.15, -3.0], piece: 'tail', kind: 'tail', n: 'Fin' }],
     collapse: 4, camDist: 30, airSpawn: 170, airThr: 0.7,
     tips: 'Throttle past 85% lights the afterburners. Rotate at 145 kt, gear up, and it climbs like a rocket. Above 35,000 ft it supercruises past Mach 1.5 without reheat. Pull the stick all the way back (past the soft stop) for the high-AoA mode: the vectoring nozzles hold the nose past 60°, enough for a J-turn. The blue box is the radar: when it locks, MSL fires an AIM-120 (Fox Three); close in, it fires an AIM-9X. REARM on the ground swaps air-to-air and air-to-ground loads.',
-    help: 'Two Pratt & Whitney F119s: 23,500 lbf dry and 35,000 lbf in reheat each, with 2-D nozzles that vector ±20° in pitch. The top 15% of the throttle is afterburner; without it the Raptor supercruises at Mach 1.5+ high up, and tops out near Mach 2.2. Fly-by-wire holds 9 G and 40° angle of attack; pulling through the sidestick soft stop opens the high-AoA mode (60°+), where the computer rolls about the flight path and the nozzles keep pitch control with the wing stalled. Weapons ride inside: six AIM-120 AMRAAMs on vertical ejectors in the main bay, two AIM-9X on trapeze rails in the side bays, and the M61A2 cannon (480 rounds, 100 a second). The APG-77 radar locks bandits within ±60° out to about 45 km. Speedbrake: ailerons up, flaperons down, rudders splayed. Model: “F-22 Raptor - Fighter Jet - Free” by bohmerang (CC BY-NC-SA 4.0).',
+    help: 'Two Pratt & Whitney F119s: 26,000 lbf dry and 35,000 lbf in reheat each, with 2-D nozzles that vector ±20° in pitch. The top 15% of the throttle is afterburner; without it the Raptor supercruises at Mach 1.5+ high up, and tops out near Mach 2.2. Fly-by-wire holds 9 G and 40° angle of attack; pulling through the sidestick soft stop opens the high-AoA mode (60°+), where the computer rolls about the flight path and the nozzles keep pitch control with the wing stalled. Weapons ride inside: six AIM-120 AMRAAMs on vertical ejectors in the main bay, two AIM-9X on trapeze rails in the side bays, and the M61A2 cannon (480 rounds, 100 a second). The APG-77 radar locks bandits within ±60° out to about 45 km. Speedbrake: ailerons up, flaperons down, rudders splayed. Model: “F-22 Raptor - Fighter Jet - Free” by bohmerang (CC BY-NC-SA 4.0).',
   },
   f35: {
     key: 'f35', name: 'F-35A Lightning II', sub: '5th-gen stealth multirole fighter', kind: 'fixed', build: buildF35, fbw: true, gLim: 9, retract: true, canopy: true, f35: true, abT: 0.85, stealth: 0.2, irK: 0.75,
@@ -5766,11 +5770,12 @@ const AC = {
   },
 
   sr71: {
-    key: 'sr71', name: 'SR-71 Blackbird', sub: 'Mach 3.3 · climbs straight up · guided nukes', kind: 'fixed', build: () => buildSR71(), sr71: true, retract: true,
+    key: 'sr71', name: 'SR-71 Blackbird', sub: 'Mach 3.3 at 85,000 ft · guided nukes', kind: 'fixed', build: () => buildSR71(), sr71: true, retract: true,
     fbw: true, gLim: 4.5, fbwAoA: 13 * D2R,   // stability augmentation: holds the attitude you set, damps yaw and roll, guards the angle of attack
     weapons: { m: [[1.2, -1.55, -1.1], [1.2, -1.55, 1.1]], b: [[-0.8, -1.6, -0.6], [-0.8, -1.6, 0.6]] },
     nuke: [[2.6, -1.65, 0.45], [2.6, -1.65, -0.45]], nukeGuided: true,   // two guided nuclear missiles in the chine bays
-    mass: 30600, fuelMax: 36300, burn: 8, I: [230000, 1500000, 1400000],
+    mass: 30600, fuelMax: 36300, fuelTO: 18100, burn: 5.6,   // most take-offs were made with only 40,000 lb of fuel, then a tanker topped it up
+    I: [230000, 1500000, 1400000],
     S: 167, b: 16.94, c: 11, CD0: 0.0125, K: 0.3, CL0: 0.1, CLA: 2.8, AS: 22 * D2R,
     // very stable: strong weathercock and roll damping, the flight computer does the rest
     CM0: 0.0, CMA: -0.32, CMDE: 0.15, CMQ: -11, CLB: -0.06, CLDA: 0.035, CLP: -0.75, CLR: 0.05, CNB: 0.2, CNDR: 0.028, CNR: -0.55, CNDA: 0, CYB: -0.6,
@@ -5789,7 +5794,7 @@ const AC = {
       { p: [-7.3, -0.62, 8.3], piece: 'wingR', kind: 'wing', n: 'Right wing' }, { p: [-7.3, -0.62, -8.3], piece: 'wingL', kind: 'wing', n: 'Left wing' },
       { p: [-7.6, 2.6, 3.5], piece: 'tail', kind: 'tail', n: 'Fin' }, { p: [-7.6, 2.6, -3.5], piece: 'tail', kind: 'tail', n: 'Fin' }],
     collapse: 4.5, camDist: 58,
-    tips: 'Full throttle lights the afterburners (watch for the green flash). Rotate at 180 kt, lift off near 210, gear up, and it climbs like a rocket. The stability system keeps it rock steady: let go of the stick and it holds. ☢ locks the nearest target ahead and fires a guided nuclear missile that air-bursts over it — then turn away. Land at 155 kt and pop the CHUTE on touchdown.',
+    tips: 'Full throttle lights the afterburners (watch for the green flash). It takes off light (40,000 lb of fuel, as the real crews did): rotate smoothly at about 180 kt to 10–12° nose up, lift off near 210, gear up. Climb at 400 kt or so, then accelerate through Mach 1 in a gentle dive and keep climbing — it only really comes alive above Mach 2, where the inlets make most of the thrust. The stability system keeps it rock steady: let go of the stick and it holds. ☢ locks the nearest target ahead and fires a guided nuclear missile that air-bursts over it — then turn away. Land at 155 kt and pop the CHUTE on touchdown.',
     airThr: 0.8, airSpawn: 105, help: 'Two J58 turbo-ramjets: the top of the throttle is afterburner, lit with a green triethylborane flash. The inlet spikes slide back as you go faster. Watch KEAS, the compressor inlet temperature (over 427°C shuts an engine down) and the skin heat. Stability augmentation holds whatever attitude you leave it in and limits you to 4.5 G. Two guided nuclear missiles: the HUD marks the target the ☢ button will lock (warships, enemy jets, range targets within about 35° of the nose, out to 120 km — or the ground 30 km ahead); tap ☢ twice to launch. CHUTE deploys the drag chute after touchdown.',
   },
   booster: {
@@ -6609,7 +6614,7 @@ function setIdx(a, pos) {
 function newState(acd, spawn) {
   const st = {
     acd, pos: spawn.pos.slice(), vel: spawn.vel.slice(), q: spawn.q.slice(), w: [0, 0, 0],
-    rpm: spawn.running ? (acd.kind === 'heli' ? 1 : 0.25 + 0.75 * (spawn.thr || 0)) : 0, engine: spawn.running, starting: 0, fuel: acd.fuelMax * (SIM.opt.fuelPct || 80) / 100,
+    rpm: spawn.running ? (acd.kind === 'heli' ? 1 : 0.25 + 0.75 * (spawn.thr || 0)) : 0, engine: spawn.running, starting: 0, fuel: acd.fuelTO && spawn.onGround && (SIM.opt.fuelPct || 80) === 80 ? acd.fuelTO : acd.fuelMax * (SIM.opt.fuelPct || 80) / 100,
     cht: spawn.running ? 150 : 25, carbIce: 0, hotT: 0, failed: {}, bent: {}, flameT: 0, unstartT: 0, skinT: 15, heatT: 0, vrs: 0, nextFail: 120 + Math.random() * 360, payload: { light: 0.9, normal: 1, heavy: 1.18 }[SIM.opt.load] || 1,
     noz: 0, gear: spawn.gearUp ? 0 : 1, contacts: acd.gear.map(() => false), airT: 0, airborne: !spawn.onGround, departed: null,
     prop: 0, alpha: 0, beta: 0, stall: false, lights: true, crashed: null, touchFpm: null, trim: 0, g: 1,
@@ -6922,6 +6927,7 @@ function stepSim(dt) {
       if (nSt > 0.05 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, clamp(nSt * 0.5, 0, 0.35) * clamp(V / 40, 0, 1));   // buffet
       const Cn = (a.CNB * tk - 0.03 * (1 - tk)) * beta + a.CNDR * yawIn * tk + a.CNR * (0.2 + 0.8 * tk) * yR * a.b / (2 * Vd) + a.CNDA * rollIn + (rw - lw) * 0.02;
       Mb = V3.add(Mb, [qbar * a.S * a.b * (Cl + ClSpin), -qbar * a.S * a.b * (Cn + CnSpin), qbar * a.S * a.c * Cm]);
+      if (a.b2 && st.engine) Mb = V3.add(Mb, [0, -yawIn * Math.max(0, T) * 0.6, 0]);   // B-2: the flight computer also yaws it with differential thrust across the four engines
       if (a.tvc) {   // vectoring nozzles: ±tvcDeg of pitch; the deflected jet also pushes the tail down a little and costs some axial thrust
         // the flight computer leans on vectoring at low dynamic pressure and high AoA; at speed the stabilators do most of the work
         const tvS = lerp(1, 0.3, smooth(9000, 32000, qbar)) + 0.7 * smooth(0.25, 0.5, alpha) * smooth(9000, 32000, qbar);
@@ -9189,10 +9195,11 @@ function buildSR71() {
 // then the compressor-inlet temperature limit caps it a little past Mach 3.2.
 function srThrust(thr, V, h, M = 0) {
   const st = SIM.st, sigma = airRho(h) / 1.225;
-  // uprated J58s: thrust-to-weight ~1.6 in full afterburner at a full fuel load, so it climbs straight up; thrust holds better
-  // with altitude, and fades out near Mach 3.35 where the inlets reach their temperature limit
-  const fM = (1 + 0.45 * M + 0.3 * M * M) * smooth(3.38, 3.12, M);
-  const per = (200e3 * Math.min(1, thr / 0.85) + 330e3 * (st.ab || 0)) * Math.pow(sigma, 0.5) * fM;
+  // J58: about 25,000 lbf dry and 34,000 lbf in afterburner at sea level. With speed the inlet and the ejector take over
+  // (at Mach 3.2 the inlet gives 54% of the thrust, the ejector 29%, the engine core 17%), so thrust grows steeply with
+  // Mach; it fades out past Mach 3.3, where the air entering the compressor reaches its 427°C limit
+  const fM = (1 + 0.35 * M + 0.26 * M * M) * smooth(3.42, 3.18, M);
+  const per = (111e3 * Math.min(1, thr / 0.85) + 40e3 * (st.ab || 0)) * Math.pow(sigma, 0.7) * fM;
   return 2 * per;
 }
 
