@@ -232,7 +232,7 @@ html,body{width:100%;height:100%;background:#0b1a33}
   <div class="btn glass" id="bRadio"><svg viewBox="0 0 24 24"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M7 9l10-5"/><circle cx="15" cy="14.5" r="2.5"/><path d="M7 13h3M7 16h3"/></svg><span id="bRadioV">RADIO</span></div>
   <div class="btn glass" id="bMenu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>MENU</span></div>
 </div>
-<div class="ctl" id="wpn"><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass" id="bDef" style="display:none"><span>DEF</span><b id="bDefV">AUTO</b></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
+<div class="ctl" id="wpn"><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass nuke" id="bRkt" style="display:none"><span>ROCKET</span><b id="bRktV">120s</b></div><div class="btn glass" id="bDef" style="display:none"><span>DEF</span><b id="bDefV">AUTO</b></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
 <div class="ctl glass" id="rud"><div class="cap" id="rudLab">RUDDER</div><div class="knob" id="rudK"></div></div>
 <div class="ctl glass" id="stick"><div class="cap t" id="stT">PULL</div><div class="cap b" id="stB">PUSH</div><div class="knob" id="stK"></div></div>
 <div id="sys" class="glass">
@@ -4684,7 +4684,7 @@ function buildB2() {
   // the model's panel face: x 6.57-6.64 (tilted back ~6°), y 0.38-0.99, across both seats
   const PN = [-0.994, 0.11, 0], PU = [0.11, 0.994, 0], at = (y, z, w, page) => ({ c: [6.6 - (y - 0.68) * 0.11 - 0.012, y, z], n: PN, up: PU, w, h: w, page });
   const screens = [at(0.7, -0.78, 0.2, 0), at(0.7, -0.38, 0.2, 1), at(0.62, 0, 0.18, 2), at(0.7, 0.38, 0.2, 1), at(0.7, 0.78, 0.2, 3)];
-  b2defParts(parts);   // the defensive turrets (stowed flush until there's a threat)
+  b2defParts(parts); b2rktParts(parts);   // the defensive turrets (stowed flush until there's a threat)
   return { parts, pieces, lights, screens, eye: [6.06, 1.14, -0.54], len: 21.5, span: 52.4 };
 }
 
@@ -4796,6 +4796,54 @@ function b2defParts(parts) {
     parts.push(part(m, [c[0], c[1] + 0.16, 0], [0, 0, 1], s => (D(s) ? D(s).las.pit : 0),
       { piece: 'fuse', show: s => dep(s) > 0.02, outer: { pivot: c, axis: [0, 1, 0], angle: s => (D(s) ? D(s).las.yaw : 0) }, offset: s => [0, -0.3 * (1 - dep(s)), 0] })); }
 }
+
+// ===================== B-2 rocket boost (game addition) =====================
+// Four rocket motors fitted at the trailing edge: 2,600 kN together (about twice the bomber's weight), 120 s of propellant,
+// restartable. Rockets don't need air, so the B-2 can climb out of the atmosphere; up there the wing does nothing and small
+// reaction jets turn it. The airframe is reinforced for it (higher speed limit while the kit is fitted).
+const B2RKT = { T: 2.6e6, BURN: 120, N: [[-8.6, 0.32, 2.3], [-8.6, 0.32, -2.3], [-8.4, 0.32, 3.7], [-8.4, 0.32, -3.7]] };
+function b2rktToggle() {
+  const st = SIM.st; if (!st.acd.b2 || st.crashed) return;
+  if (!st.rkt) st.rkt = { on: false, prop: B2RKT.BURN };
+  if (st.rkt.prop <= 0) return ui.toast('ROCKETS EMPTY', 'Land and REARM to refill the propellant');
+  st.rkt.on = !st.rkt.on; SIM.ev.push({ t: st.rkt.on ? 'launch' : 'click', v: 1 });
+  ui.toast(st.rkt.on ? 'ROCKETS IGNITED' : 'ROCKETS CUT OFF', st.rkt.on ? `${Math.round(st.rkt.prop)} s of propellant — pull up and keep climbing` : `${Math.round(st.rkt.prop)} s left`);
+  if (typeof updWpn === 'function') updWpn();
+}
+// called from the fixed-wing physics: returns the extra body-frame force and moment
+function b2rktStep(st, a, c, dt, qbar) {
+  if (!st.rkt) st.rkt = { on: false, prop: B2RKT.BURN };
+  const R = st.rkt; let F = [0, 0, 0], M = [0, 0, 0];
+  if (R.on && R.prop > 0 && !st.crashed) {
+    R.prop = Math.max(0, R.prop - dt); R.used = true;
+    const k = Math.min(1, (R.t = (R.t || 0) + dt) / 0.6);   // light-up
+    F = [B2RKT.T * k * (1 + 0.12 * (1 - airRho(st.pos[1]) / 1.225)), 0, 0];   // a little more thrust in thin air (less back-pressure)
+    SIM.shake = Math.max(SIM.shake || 0, 0.25);
+    if (R.prop <= 0) { R.on = false; ui.toast('ROCKET BURNOUT', 'Propellant gone'); if (typeof updWpn === 'function') updWpn(); }
+  } else R.t = 0;
+  // reaction control jets: take over as the air gets too thin for the elevons
+  const rcs = clamp(1 - qbar / 4000, 0, 1);
+  if (rcs > 0) {
+    const p = st.w[0], q = st.w[2], r = -st.w[1];
+    M = [a.I[0] * (c.roll * 0.5 - p) * 1.5 * rcs, -a.I[1] * ((c.yaw || 0) * 0.25 - r) * 1.5 * rcs, a.I[2] * (c.pitch * 0.35 - q) * 1.5 * rcs];
+  }
+  return { F, M };
+}
+function b2rktParts(parts) {
+  const S = s => s.st || {}, on = s => S(s).rkt && S(s).rkt.on;
+  for (const n of B2RKT.N) {
+    const bell = AMB(); rev(bell, [n[0] + 0.6, n[1], n[2]], [-1, 0, 0], [[0, 0.22], [0.5, 0.32], [0.9, 0.5]], 16, [0.22, 0.2, 0.19]);
+    parts.push(part(bell, O3, [0, 1, 0], () => 0, { piece: 'fuse', show: s => !!S(s).rkt && S(s).rkt.used || on(s) }));
+    const core = AMB(), out = AMB();
+    rev(core, [0, 0, 0], [-1, 0, 0], [[0, 0.42], [0.3, 0.36], [1, 0]], 14, [1, 0.85, 0.6, 3]);
+    rev(out, [0, 0, 0], [-1, 0, 0], [[0, 0.5], [0.4, 0.9], [1, 0]], 14, [1, 0.45, 0.2, 3]);
+    const vac = s => clamp(1 - airRho(s.st.pos[1]) / 1.225, 0, 1), fl = s => 0.85 + 0.15 * Math.sin(s.t * 47 + n[2]);
+    const off = () => [n[0] - 0.3, n[1], n[2]];
+    parts.push(part(core, O3, [1, 0, 0], () => 0, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, show: on, alpha: s => 0.9 * fl(s), scale: s => [6 + 5 * vac(s), 1 + vac(s) * 1.5, 1 + vac(s) * 1.5] }));
+    parts.push(part(out, O3, [1, 0, 0], () => 0, { piece: 'fuse', add: true, unlit: 1, twoSided: true, offset: off, show: on, alpha: s => 0.35 * fl(s), scale: s => [14 + 20 * vac(s), 1.2 + vac(s) * 6, 1.2 + vac(s) * 6] }));
+  }
+}
+const O3 = [0, 0, 0];
 
 // ===================== aircraft models (low-poly, original designs) =====================
 // body axes: x forward, y up, z right. Metres from the centre of gravity.
@@ -5822,7 +5870,7 @@ const AC = {
     CM0: 0.0, CMA: -0.14, CMDE: 0.11, CMQ: -6, CLB: -0.05, CLDA: 0.028, CLP: -0.5, CLR: 0.08, CNB: 0.045, CNDR: 0.014, CNR: -0.13, CNDA: 0.002, CYB: -0.12,
     // four General Electric F118 turbofans, 77 kN each, buried in the wing
     thrust: (n, V, h, M) => (0.05 + 0.95 * Math.pow(clamp(n, 0, 1), 1.3)) * 308000 * Math.pow(airRho(h) / 1.225, 0.75) * Math.max(0.62, 1 - 0.2 * M),   // 4 × 17,300 lbf; ram recovery keeps more of it with speed
-    machDrag: M => M < 0.8 ? 0 : 26 * (M - 0.8) ** 2,
+    machDrag: M => M < 0.8 ? 0 : Math.min(26 * (M - 0.8) ** 2, 0.045 + 0.01 * Math.max(0, M - 1.2)),   // transonic rise, then supersonic wave drag (only reachable with the rocket kit)
     spool: 0.26, startTime: 18,
     sets: [0], setLabel: 'FLAPS', FCL: [0], FCD: [0], FCM: [0], flapAS: [0],
     gear: [
@@ -6942,6 +6990,7 @@ function stepSim(dt) {
       }
     }
     st.thrust = T;
+    if (a.b2) { const rk = b2rktStep(st, a, c, dt, qbar); Fb = V3.add(Fb, rk.F); Mb = V3.add(Mb, rk.M); st.propB = V3.add(st.propB || [0, 0, 0], rk.F); }   // B-2 rocket kit + reaction jets
     let alpha = 0, beta = 0, stall = false;
     if (V > 1) {
       alpha = Math.atan2(-vb[1], vb[0]);
@@ -7438,14 +7487,15 @@ function makeDebris(st, name, extraV = 0) {
 function checkLimits(st, a, dt) {
   const L = a.limits, kias = st.ias * KT;
   st.gS = (st.gS == null ? 1 : st.gS) + (st.g - (st.gS == null ? 1 : st.gS)) * Math.min(1, dt / 0.08);
-  st.lim = { vne: kias > L.vne, flap: false, overG: st.gS > L.gMax || st.gS < L.gMin, red: a.prop && st.rpm * a.prop.rpm > L.rpmRed + 15 };
+  const vne = L.vne * (st.rkt && st.rkt.used ? 1.6 : 1);
+  st.lim = { vne: kias > vne, flap: false, overG: st.gS > L.gMax || st.gS < L.gMin, red: a.prop && st.rpm * a.prop.rpm > L.rpmRed + 15 };
   const touching = st.contacts.some(Boolean); st.gndT = touching ? 0.6 : Math.max(0, (st.gndT || 0) - dt);
   if (st.gndT > 0) st.lim.overG = false;          // landing loads are the gear's business, not the wing's
   if (!st.airborne || st.crashed || !SIM.opt.crashes) return;
   // well past Vne the tail flutters and lets go
-  st.flutT = kias > L.vne * 1.1 ? (st.flutT || 0) + dt : Math.max(0, (st.flutT || 0) - dt);
-  if (kias > L.vne) SIM.shake = Math.max(SIM.shake || 0, clamp((kias - L.vne) / 25, 0, 1) * 0.8);
-  if (st.flutT > 2.5) { st.flutT = -1e9; losePiece('tail', `Flutter at ${Math.round(kias)} kt — beyond Vne ${L.vne} kt`); }
+  st.flutT = kias > vne * 1.1 ? (st.flutT || 0) + dt : Math.max(0, (st.flutT || 0) - dt);
+  if (kias > vne) SIM.shake = Math.max(SIM.shake || 0, clamp((kias - vne) / 25, 0, 1) * 0.8);
+  if (st.flutT > 2.5) { st.flutT = -1e9; losePiece('tail', `Flutter at ${Math.round(kias)} kt — beyond Vne ${Math.round(vne)} kt`); }
   // flaps blown back / bent when extended well above their limit speed
   const fi = Math.round(setIdx(a, st.flapPos || 0));
   if (fi > 0) { st.lim.flap = kias > L.vfe[fi]; st.flapOT = kias > L.vfe[fi] + 15 ? (st.flapOT || 0) + dt : Math.max(0, (st.flapOT || 0) - dt);
@@ -7828,7 +7878,7 @@ function audioUpdate(dt, camDist, cockpit, active) {
   setP(N.jWhine.frequency, (fan ? 300 + spool * 2400 : 500 + spool * 3600) * dop, 0.25); setP(N.jWhine2.frequency, (fan ? 700 + spool * 4200 : 1000 + spool * 7200) * dop, 0.25);
   setP(N.jWhineG.gain, jet && !rkt ? (0.02 + spool * (fan ? 0.08 : 0.05)) * att * fore * (cockpit ? (fan ? 0.7 : 1.5) : 1) : 0, 0.2);
   // afterburner: the rumble and crackle, loudest behind
-  const ab = jet && !rkt ? (st.ab || 0) * spool : 0;
+  const ab = Math.max(jet && !rkt ? (st.ab || 0) * spool : 0, st.rkt && st.rkt.on && !crashed ? 1.3 : 0);   // the B-2's rocket kit roars like a huge afterburner
   setP(N.abRG.gain, ab * 0.5 * att * aft * (cockpit ? 0.45 : 1), 0.12); setP(N.abRF.frequency, (180 + ab * 120) * Math.sqrt(dop));
   setP(N.abCG.gain, ab * 0.22 * att * clamp(aft - 0.4, 0, 1) * (cockpit ? 0.2 : 1), 0.1); setP(N.abCLG.gain, ab * 5, 0.1); setP(N.abCF.frequency, 1100 * dop);
   // the nearest other aircraft: you hear it pass
@@ -8067,6 +8117,7 @@ function fireAmraam() {
   ui.toast(tgt ? 'FOX THREE' : 'AMRAAM AWAY — NO LOCK', tgt ? `AIM-120 active radar · ${tgt.name || 'bandit'} · ${(V3.len(V3.sub(tgt.p, st.pos)) / 1000).toFixed(1)} km` : 'Wait for the radar box to lock (about a second on target)');
 }
 function rearm() {
+  if (SIM.st.rkt) { SIM.st.rkt.prop = B2RKT.BURN; SIM.st.rkt.on = false; }   // refill the B-2's rocket propellant too
   const st = SIM.st;
   if (!st.stores) return;
   if (!st.onGround || st.tas > 2) { ui.toast('REARM', 'Stop on the ground first'); return; }
@@ -12224,6 +12275,7 @@ function render() {
   SIM.inCloud = inCloudK();
   const envF = Object.assign({}, env, { zen: V3.lerp(V3.lerp(env.zen, [0.02, 0.04, 0.14], hi), [0.004, 0.006, 0.02], sp), hor: V3.lerp(V3.lerp(env.hor, [0.42, 0.6, 0.85], hi * 0.6), [0.22, 0.34, 0.62], sp * 0.8), fog: V3.lerp(V3.lerp(env.fog, [0.5, 0.65, 0.85], hi * 0.5), [0.3, 0.42, 0.66], sp * 0.6), fogDen: env.fogDen / (1 + Math.max(0, cam.eye[1]) / 2500), camAlt: cam.eye[1] });
   if (SIM.inCloud > 0) { const k = SIM.inCloud, wc = V3.mul(V3.lerp([0.9, 0.92, 0.95], env.amb, 0.4), 0.6 + 0.6 * clamp(env.sunDir[1] * 2 + 0.3, 0, 1)); envF.fog = V3.lerp(envF.fog, wc, k); envF.fogDen = envF.fogDen * (1 + 60 * k * k); envF.hor = V3.lerp(envF.hor, wc, k); envF.zen = V3.lerp(envF.zen, wc, k); }
+  if (sp > 0) envF.atmK = (env.atmK == null ? 1 : env.atmK) * (1 - sp);   // above the air the scattered blue fades out
   let VP = M4.mul(proj, view);
   setFrame(VP, cam.eye, envF, nightLights(st));
   const E = cam.eye, I = M4.ident();
@@ -12820,6 +12872,7 @@ function bindControls() {
     c.rev = !c.rev; SIM.ev.push({ t: 'clunk', k: 'gear' }); if (c.rev) ui.toast('REVERSE THRUST', 'Raise POWER for more reverse — stow by 60 kt'); updSys(); });
   tap('sCarb', () => { SIM.ctl.carbHeat = !SIM.ctl.carbHeat; SIM.ev.push({ t: 'click' }); updSys(); });
   tap('bMsl', () => { fireStore('m'); updWpn(); });
+  tap('bRkt', () => { b2rktToggle(); });
   tap('bDef', () => { const d = SIM.st.def; if (!d) return; d.arm = !d.arm; SIM.ev.push({ t: 'click' }); ui.toast(d.arm ? 'DEFENSIVE SUITE ARMED' : 'DEFENSIVE SUITE STOWED', d.arm ? 'Turrets and laser fire on their own at missiles and bandits' : 'Weapons hold — turrets down, stealthy again'); updWpn(); });
   tap('bBomb', () => { fireStore('b'); updWpn(); });
   { const gb = $('bGun'), on = v => e => { e.preventDefault(); e.stopPropagation(); SIM.st.gunOn = v; gb.classList.toggle('armed', v); };   // hold to fire
@@ -13063,6 +13116,7 @@ function frame(now) {
   render();
   audioUpdate(dt, V3.len(V3.sub(cam.eye, SIM.st.crashed && SIM.st.crashed.main ? SIM.st.crashed.main.pos : SIM.st.pos)), inCk() && appState === 'fly', appState === 'fly' && !portrait);
   if (appState === 'fly') updateHUD(dt);
+  if (appState === 'fly' && st.rkt && st.rkt.on && ((frame.rk = (frame.rk || 0) + dt) > 0.5)) { frame.rk = 0; updWpn(); }
   if (appState === 'fly' && st.acd.stovl && (st.conv > 0 && st.conv < 1 || st.fan > 0 && st.fan < 1 || (frame.sk = (frame.sk || 0) + dt) > 0.5)) { frame.sk = 0; updSet(); }
   orbUI();
   requestAnimationFrame(frame);
@@ -13379,6 +13433,7 @@ function updWpn() {
   $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.r ? S.r.filter(Boolean).length + '+' + S.m.filter(Boolean).length : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : S.b.filter(Boolean).length;
   $('bMsl').style.display = S.m.length ? '' : 'none';
   $('bBomb').style.display = S.lo === 'aa' ? 'none' : '';
+  $('bRkt').style.display = SIM.st.acd.b2 ? '' : 'none'; if (SIM.st.acd.b2) { const R = SIM.st.rkt; $('bRktV').textContent = R ? (R.prop > 0 ? Math.ceil(R.prop) + 's' : 'EMPTY') : '120s'; $('bRkt').classList.toggle('armed', !!(R && R.on)); }
   $('bDef').style.display = SIM.st.def ? '' : 'none'; if (SIM.st.def) { $('bDefV').textContent = SIM.st.def.arm ? 'AUTO' : 'HOLD'; $('bDef').classList.toggle('armed', !!SIM.st.def.arm); }
   $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) ? '' : 'none';
   $('bNuke').style.display = S.n ? '' : 'none'; if (S.n) $('bNukeV').textContent = CFG.unlimitedWpn ? '∞' : S.n.filter(Boolean).length;
