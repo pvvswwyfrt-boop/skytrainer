@@ -4204,25 +4204,40 @@ function cityTileBuild(ti, tj, lite) {
   for (const s of TILE_STY) if (TM[s].day.d.length) { out.day.push(TM[s].day.build()); out.night.push(TM[s].night.build()); }
   return out;
 }
-function cityTilesUpdate(eye) {
+// Real-county tiles stream in around you AND ahead of you, so the ground and buildings are already built by the time
+// you get there: the packs (4 km) are fetched ~10-35 s ahead along your track, tiles are built nearest-first in the
+// direction you are flying within a few milliseconds per frame, and far / behind tiles stay cached but aren't drawn.
+function cityTilesUpdate(eye, at) {
   if (!MIA.M) return [];
-  const S = CITY_T.size, alt = eye[1] - Math.max(0, terrainH(eye[0], eye[2]));
-  const RF = alt < 700 ? 1 : -1, RL = alt < 900 ? 2 : alt < 2600 ? 1 : -1;   // full-detail radius, lite radius (in tiles)
-  const ci = Math.floor(eye[0] / S), cj = Math.floor(eye[2] / S), want = [];
-  for (let dj = -RL; dj <= RL; dj++) for (let di = -RL; di <= RL; di++) want.push([ci + di, cj + dj, Math.max(Math.abs(di), Math.abs(dj)) > RF]);
-  want.sort((a, b) => (Math.abs(a[0] - ci) + Math.abs(a[1] - cj)) - (Math.abs(b[0] - ci) + Math.abs(b[1] - cj)));
-  let built = 0; const out = [], now = performance.now();
-  for (const [i, j, lite] of want) {
-    const k = i + ',' + j + (lite ? 'L' : 'F'); let t = CITY_T.tiles.get(k);
-    if (!t && built < 1) {
-      const D = rtTile(i, j);   // the county's real buildings and streets, when that pack has arrived
-      if (D !== null) { t = { mesh: D ? rtTileBuild(i, j, lite, D) : cityTileBuild(i, j, lite), t: 0, real: !!D }; CITY_T.tiles.set(k, t); built++; }
+  const S = CITY_T.size, alt = eye[1] - Math.max(0, terrainH(eye[0], eye[2])), q = typeof qual === 'function' ? qual() : {};
+  const lvl = q === QPRESET.low ? 0 : q === QPRESET.medium ? 1 : 2;
+  const RF = alt < 900 ? [1, 2, 2][lvl] : alt < 1500 ? 1 : -1;                                              // full detail radius (tiles)
+  const RL = alt < 1200 ? [2, 3, 4][lvl] : alt < 3500 ? [2, 3, 3][lvl] : alt < 6500 ? [1, 2, 2][lvl] : -1;  // lite radius
+  const v = SIM.st && !SIM.st.crashed ? SIM.st.vel : [0, 0, 0], vh = Math.hypot(v[0], v[2]);
+  const look = Math.min(vh * 8, S * 2.5), ax = eye[0] + (vh > 1 ? v[0] / vh * look : 0), az = eye[2] + (vh > 1 ? v[2] / vh * look : 0);
+  // fetch the county packs along the track before they're needed
+  if (typeof rtPrefetch === 'function') { rtPrefetch(eye[0], eye[2]); for (const tt of [10, 20, 35]) rtPrefetch(eye[0] + v[0] * tt, eye[2] + v[2] * tt); }
+  const want = new Map();
+  const ring = (cx, cz) => { const ci = Math.floor(cx / S), cj = Math.floor(cz / S);
+    for (let dj = -RL; dj <= RL; dj++) for (let di = -RL; di <= RL; di++) { const i = ci + di, j = cj + dj, lite = Math.max(Math.abs(di), Math.abs(dj)) > RF, k = i + ',' + j, o = want.get(k);
+      if (!o || (o.lite && !lite)) want.set(k, { i, j, lite }); } };
+  if (RL >= 0) { ring(eye[0], eye[2]); if (look > S * 0.5) ring(ax, az); }
+  const fx = at ? at[0] - eye[0] : 0, fz = at ? at[2] - eye[2] : 0, fl = Math.hypot(fx, fz) || 1;
+  const list = [...want.values()].map(w => { const cx = (w.i + 0.5) * S, cz = (w.j + 0.5) * S, dx = cx - eye[0], dz = cz - eye[2], d = Math.hypot(dx, dz);
+    const ahead = (dx * fx + dz * fz) / fl; w.d = d; w.vis = d < S * 1.6 || ahead > -S * 0.75; w.pri = Math.hypot(cx - ax, cz - az) + (w.vis ? 0 : S * 3) + (w.lite ? S * 0.5 : 0); return w; });
+  list.sort((a, b) => a.pri - b.pri);
+  const out = [], now = performance.now(), t0 = now; let built = 0;
+  for (const w of list) {
+    const k = w.i + ',' + w.j + (w.lite ? 'L' : 'F'); let t = CITY_T.tiles.get(k);
+    if (!t && built < 4 && (built === 0 || performance.now() - t0 < 6)) {
+      const D = rtTile(w.i, w.j);   // the county's real buildings and streets, when that pack has arrived
+      if (D !== null) { t = { mesh: D ? rtTileBuild(w.i, w.j, w.lite, D) : cityTileBuild(w.i, w.j, w.lite), t: 0, real: !!D }; CITY_T.tiles.set(k, t); built++; }
     }
-    if (!t && !lite) t = CITY_T.tiles.get(i + ',' + j + 'L');   // full detail still coming: show the lite tile meanwhile
-    if (!t && lite) t = CITY_T.tiles.get(i + ',' + j + 'F');
-    if (t) { t.t = now; out.push(t.mesh); }
+    if (!t && !w.lite) t = CITY_T.tiles.get(w.i + ',' + w.j + 'L');   // full detail still coming: show the lite tile meanwhile
+    if (!t && w.lite) t = CITY_T.tiles.get(w.i + ',' + w.j + 'F');
+    if (t) { t.t = now; if (w.vis) out.push(t.mesh); }
   }
-  const cap = rtOn() ? 40 : 70;
+  const cap = rtOn() ? [60, 95, 130][lvl] : 140;
   if (CITY_T.tiles.size > cap) { const old = [...CITY_T.tiles.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, CITY_T.tiles.size - cap); for (const [k, t] of old) { if (t.t === now) continue;
     for (const m of [t.mesh.plain, ...t.mesh.day, ...t.mesh.night, t.mesh.ground, t.mesh.gnight]) if (m) R.gl.deleteBuffer(m.buf);
     for (const tx of t.mesh.texs || []) R.gl.deleteTexture(tx.t);
@@ -4326,6 +4341,15 @@ function rtTile(i, j) {
   if (!t) return false;
   if (!t.parsed) P[k] = rtParse(t.dv, t.off, t.len), P[k].parsed = true;
   return P[k];
+}
+// start downloading the 4 km pack under a point (and its neighbours when close to an edge), a few at a time
+function rtPrefetch(x, z) {
+  if (!rtOn() || RT.pend.size >= 4) return;
+  const P = 4 * CITY_T.size;
+  for (const [ox, oz] of [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const pi = Math.floor((x + ox * P * 0.35) / P), pj = Math.floor((z + oz * P * 0.35) / P), key = pi + ',' + pj;
+    if (RT.pend.size < 4 && RT.packs.has(key) && RT.data.get(key) === undefined && !RT.pend.has(key)) rtTile(pi * 4, pj * 4);
+  }
 }
 function rtPack(buf) {
   const dv = new DataView(buf), out = [];
@@ -12071,7 +12095,7 @@ function render() {
   if (env.lightK > 0) draw(G.city.crown, I, { add: true, unlit: 1, alpha: Math.min(1, env.lightK * 1.3), fogMul: 0.3 });   // LED crowns
   if (qual().traffic !== false && TRAFFIC.segs && env.lightK < 0.9) { if ((CARS.f++ % 3) === 0 || !CARS.mesh) carsUpdate(cam.eye, performance.now() / 1000); if (CARS.mesh && CARS.mesh.n) draw(CARS.mesh, I); }   // cars and trucks by day
   stepBoats(1 / 60, cam.eye); drawBoats(cam.eye);
-  const ctl = cityTilesUpdate(cam.eye);
+  const ctl = cityTilesUpdate(cam.eye, cam.at);
   gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1.5, -4.5);   // real county ground: above the terrain, under the airport pavement
   for (const t of ctl) if (t.ground) draw(t.ground, I);
   if (env.lightK > 0) for (const t of ctl) if (t.gnight) draw(t.gnight, I, { add: true, unlit: 1, alpha: Math.min(0.99, env.lightK * 0.9), fogMul: 0.35 });
