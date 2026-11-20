@@ -232,7 +232,7 @@ html,body{width:100%;height:100%;background:#0b1a33}
   <div class="btn glass" id="bRadio"><svg viewBox="0 0 24 24"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M7 9l10-5"/><circle cx="15" cy="14.5" r="2.5"/><path d="M7 13h3M7 16h3"/></svg><span id="bRadioV">RADIO</span></div>
   <div class="btn glass" id="bMenu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>MENU</span></div>
 </div>
-<div class="ctl" id="wpn"><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
+<div class="ctl" id="wpn"><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass" id="bDef" style="display:none"><span>DEF</span><b id="bDefV">AUTO</b></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
 <div class="ctl glass" id="rud"><div class="cap" id="rudLab">RUDDER</div><div class="knob" id="rudK"></div></div>
 <div class="ctl glass" id="stick"><div class="cap t" id="stT">PULL</div><div class="cap b" id="stB">PUSH</div><div class="knob" id="stK"></div></div>
 <div id="sys" class="glass">
@@ -4684,7 +4684,117 @@ function buildB2() {
   // the model's panel face: x 6.57-6.64 (tilted back ~6°), y 0.38-0.99, across both seats
   const PN = [-0.994, 0.11, 0], PU = [0.11, 0.994, 0], at = (y, z, w, page) => ({ c: [6.6 - (y - 0.68) * 0.11 - 0.012, y, z], n: PN, up: PU, w, h: w, page });
   const screens = [at(0.7, -0.78, 0.2, 0), at(0.7, -0.38, 0.2, 1), at(0.62, 0, 0.18, 2), at(0.7, 0.38, 0.2, 1), at(0.7, 0.78, 0.2, 3)];
+  b2defParts(parts);   // the defensive turrets (stowed flush until there's a threat)
   return { parts, pieces, lights, screens, eye: [6.06, 1.14, -0.54], len: 21.5, span: 52.4 };
+}
+
+// ===================== B-2 defensive suite (game addition: the real B-2 carries no guns and relies on stealth) =====================
+// Two automatic gun turrets, one on the spine and one under the belly, that rise out of the skin when there's a threat, and a
+// laser turret on the nose. They track by themselves: incoming missiles first, then bandits. Firing gives the stealth away —
+// radar sees you much further out while the turrets are up. DEF on the weapons panel arms or stows the whole suite.
+const B2DEF = {
+  T: [{ p: [-1.6, 1.42, 0], up: 1 }, { p: [-1.6, -1.18, 0], up: -1 }],   // turret rings (body frame): spine and belly
+  L: [4.2, 1.46, 0],                                                        // laser turret, just behind the cockpit
+  GUN_R: 2200, MSL_R: 1600, LAS_R: 5000, AMMO: 2000,
+  beam: null,
+};
+function b2defReset(st) { st.def = { arm: true, dep: 0, t: [{ yaw: 0, pit: 0, tgt: null, acc: 0 }, { yaw: 0, pit: 0, tgt: null, acc: 0 }], ammo: B2DEF.AMMO, las: { yaw: 0, pit: 0, tgt: null, dwell: 0, heat: 0, on: false, cool: false }, evT: 0 }; }
+function b2defThreats(st) {
+  const out = [];
+  for (const pr of SIM.proj) if (pr.enemy && !pr.done && pr.target === PLAYER_TGT) { const d = V3.len(V3.sub(pr.p, st.pos)); if (d < B2DEF.LAS_R) out.push({ o: pr, msl: true, d, p: pr.p, v: pr.v }); }
+  for (const ai of AI.list) if (!ai.dead && ai.role === 'hostile') { const d = V3.len(V3.sub(ai.p, st.pos)); if (d < B2DEF.LAS_R) out.push({ o: ai, msl: false, d, p: ai.p, v: ai.v || [0, 0, 0] }); }
+  return out.sort((a, b) => (a.msl ? a.d * 0.4 : a.d) - (b.msl ? b.d * 0.4 : b.d));
+}
+// aim a turret (yaw about body y, pitch about its own z) toward a world point; returns the angle still to go
+function b2defAim(t, st, mount, wp, dt, rate) {
+  const rel = Q.inv(st.q, V3.sub(wp, V3.add(st.pos, Q.rot(st.q, mount)))), yaw = Math.atan2(-rel[2], rel[0]), pit = Math.atan2(rel[1], Math.hypot(rel[0], rel[2]));
+  let dy = yaw - t.yaw; dy = Math.atan2(Math.sin(dy), Math.cos(dy));
+  t.yaw += clamp(dy, -rate * dt, rate * dt); t.pit += clamp(pit - t.pit, -rate * dt, rate * dt);
+  return Math.hypot(Math.atan2(Math.sin(yaw - t.yaw), Math.cos(yaw - t.yaw)), pit - t.pit);
+}
+function b2defMuzzleDir(st, t) { return Q.rot(st.q, [Math.cos(t.pit) * Math.cos(t.yaw), Math.sin(t.pit), -Math.cos(t.pit) * Math.sin(t.yaw)]); }
+function stepB2Def(dt) {
+  const st = SIM.st; if (!st.acd.b2 || st.crashed || st.ej) { if (st.def) { st.def.las.on = false; } return; }
+  if (!st.def) b2defReset(st);
+  const D = st.def, th = D.arm && st.airborne ? b2defThreats(st) : [];
+  const want = th.some(x => x.d < B2DEF.GUN_R || (x.msl && x.d < B2DEF.LAS_R)) ? 1 : 0;
+  const was = D.dep; D.dep = clamp(D.dep + (want ? 1 : -0.5) * dt / 1.6, 0, 1);
+  if (was < 0.02 && D.dep >= 0.02) { SIM.ev.push({ t: 'servo', k: 'gear' }); ui.toast('DEFENSIVE TURRETS UP', 'Guns and laser are tracking — the radar can see you now'); }
+  // ---- guns: each turret takes the nearest threat in its own half (spine: above the wing, belly: below)
+  for (let i = 0; i < 2; i++) {
+    const T = B2DEF.T[i], t = D.t[i];
+    let best = null;
+    for (const x of th) { if (x.d > (x.msl ? B2DEF.MSL_R : B2DEF.GUN_R)) continue; const rel = Q.inv(st.q, V3.sub(x.p, st.pos)); if (rel[1] * T.up < -x.d * 0.15) continue; best = x; break; }
+    t.tgt = best;
+    if (!best || D.dep < 0.95) { t.pit += (0 - t.pit) * Math.min(1, dt * 2); continue; }
+    // lead: where it will be when the rounds get there
+    const tof = best.d / GUN_V, lead = V3.add(best.p, V3.mul(V3.sub(best.v, st.vel), tof));
+    const off = b2defAim(t, st, T.p, lead, dt, 2.6); t.off = off;
+    if (off < 0.035 && (D.ammo > 0 || CFG.unlimitedWpn)) {
+      t.acc += dt * 20;
+      const mz = V3.add(st.pos, Q.rot(st.q, V3.add(T.p, [0, T.up * 0.25, 0])));
+      while (t.acc >= 1) { t.acc--; if (!CFG.unlimitedWpn) D.ammo = Math.max(0, D.ammo - 3);
+        const d = V3.norm(V3.add(b2defMuzzleDir(st, t), [(Math.random() - 0.5) * 0.006, (Math.random() - 0.5) * 0.006, (Math.random() - 0.5) * 0.006]));
+        GUN.rounds.push({ p: mz.slice(), v: V3.add(st.vel, V3.mul(d, GUN_V)), t: Math.random() * 0.02, own: true, ciws: true }); }
+      if (Math.random() < dt * 25) spawnFx('flash', mz, st.vel, 0.35);
+      D.evT -= dt; if (D.evT <= 0) { D.evT = 0.09; SIM.ev.push({ t: 'gun', v: 0.6 }); }
+    }
+  }
+  // turret rounds also knock down missiles
+  for (const r of GUN.rounds) if (r.ciws && r.t < 90) for (const pr of SIM.proj) if (pr.enemy && !pr.done && V3.len(V3.sub(pr.p, r.p)) < 5) {
+    pr.done = true; r.t = 99; explode(pr.p, 0.18, false); ui.toast('MISSILE SHOT DOWN', 'The turret got it'); break; }
+  // ---- laser: burns missiles first (0.6 s), then aircraft (1.6 s); it overheats after 8 s of firing and needs 6 s to cool
+  const L = D.las;
+  L.heat = clamp(L.heat + (L.on ? dt / 8 : -dt / 6), 0, 1);
+  if (L.heat >= 1) L.cool = true; if (L.cool && L.heat < 0.15) L.cool = false;
+  const lt = D.dep > 0.9 && !L.cool ? th.find(x => x.d < B2DEF.LAS_R && (x.msl || x.d < B2DEF.LAS_R * 0.9)) : null;
+  if (!lt || !L.tgt || lt.o !== L.tgt.o) L.dwell = 0;   // same target (threat records are rebuilt every step): keep burning
+  L.tgt = lt;
+  L.on = false;
+  if (lt) {
+    const off = b2defAim(L, st, B2DEF.L, lt.p, dt, 3.5);
+    if (off < 0.02) { L.on = true; L.dwell += dt;
+      if (Math.random() < dt * 20) spawnFx('spark', lt.p, lt.v, 0.4);
+      if (L.dwell > (lt.msl ? 0.6 : 1.6)) {
+        if (lt.msl) { lt.o.done = true; explode(lt.o.p, 0.2, false); ui.toast('LASER KILL', 'Missile destroyed'); }
+        else { const ai = lt.o; ai.hp = 0; if (!ai.dead) { ai.dead = true; explode(ai.p, 0.5, false); AI.kills = (AI.kills || 0) + 1; ui.toast('LASER KILL', ai.name + ' is going down · ' + AI.kills + ' kills'); } }
+        L.tgt = null; L.dwell = 0;
+      }
+    }
+  } else L.pit += (0 - L.pit) * Math.min(1, dt * 2);
+}
+// the beam: a thin glowing rod from the laser turret to the target
+function drawB2Def() {
+  const st = SIM.st; if (!st.acd.b2 || !st.def || !st.def.las.on || !st.def.las.tgt) return;
+  if (!B2DEF.beam) { const m = new MB(); m.cyl([0, 0, 0], [1, 0, 0], 1, 1, 8, [1, 1, 1], false); B2DEF.beam = m.build(); }
+  const a = V3.add(st.pos, Q.rot(st.q, V3.add(B2DEF.L, [0, 0.18, 0]))), b = st.def.las.tgt.p, d = V3.sub(b, a), Lh = V3.len(d); if (Lh < 1) return;
+  const x = V3.mul(d, 1 / Lh), tmp = Math.abs(x[1]) < 0.9 ? [0, 1, 0] : [1, 0, 0], y = V3.norm(V3.cross(x, tmp)), z = V3.cross(x, y);
+  for (const [r, col, al] of [[0.06, [1, 0.25, 0.2], 1], [0.28, [1, 0.1, 0.08], 0.35]]) {
+    const m = new Float32Array([x[0] * Lh, x[1] * Lh, x[2] * Lh, 0, y[0] * r, y[1] * r, y[2] * r, 0, z[0] * r, z[1] * r, z[2] * r, 0, a[0], a[1], a[2], 1]);
+    draw(B2DEF.beam, m, { add: true, unlit: 1, alpha: al * (0.85 + 0.15 * Math.random()), tint: col, twoSided: true, fogMul: 0.2 });
+  }
+}
+function b2defGlows() {
+  const st = SIM.st; if (!st.acd.b2 || !st.def || !st.def.las.on || !st.def.las.tgt) return;
+  const p = st.def.las.tgt.p; DYNG.push([p[0], p[1], p[2], 2600, 1, 0.35, 0.2, 0, 0, 0]);
+  const a = V3.add(st.pos, Q.rot(st.q, V3.add(B2DEF.L, [0, 0.18, 0]))); DYNG.push([a[0], a[1], a[2], 1600, 1, 0.3, 0.25, 0, 0, 0]);
+}
+// turret meshes for the B-2 model: a low dome ring with twin barrels; they rise out of the skin when deployed
+function b2defParts(parts) {
+  const S = s => s.st || {}, dep = s => (S(s).def && S(s).def.dep) || 0, D = s => S(s).def;
+  // geometry is built in place at each mount; the turret yaws about its mount, the guns pitch about their trunnion
+  B2DEF.T.forEach((T, i) => {
+    const m = AMB(), G = [0.2, 0.21, 0.23], B = [0.12, 0.12, 0.13], c = T.p, up = T.up;
+    rev(m, c, [0, up, 0], [[0, 0.42], [0.12, 0.4], [0.24, 0.28], [0.3, 0]], 20, G);
+    for (const z of [-0.09, 0.09]) m.cyl([c[0] + 0.1, c[1] + up * 0.17, z], [c[0] + 1.25, c[1] + up * 0.17, z], 0.045, 0.035, 8, B);
+    const t = s => (D(s) ? D(s).t[i] : { yaw: 0, pit: 0 });
+    parts.push(part(m, [c[0], c[1] + up * 0.17, c[2]], [0, 0, 1], s => t(s).pit,
+      { piece: 'fuse', show: s => dep(s) > 0.02, outer: { pivot: c, axis: [0, 1, 0], angle: s => t(s).yaw }, offset: s => [0, -up * 0.32 * (1 - dep(s)), 0] }));
+  });
+  { const m = AMB(), c = B2DEF.L; rev(m, c, [0, 1, 0], [[0, 0.3], [0.14, 0.28], [0.26, 0]], 18, [0.18, 0.18, 0.2]);
+    m.cyl([c[0] + 0.05, c[1] + 0.16, 0], [c[0] + 0.75, c[1] + 0.16, 0], 0.08, 0.08, 10, [0.1, 0.1, 0.11]); m.cyl([c[0] + 0.74, c[1] + 0.16, 0], [c[0] + 0.8, c[1] + 0.16, 0], 0.1, 0.1, 10, [0.25, 0.5, 0.7]);
+    parts.push(part(m, [c[0], c[1] + 0.16, 0], [0, 0, 1], s => (D(s) ? D(s).las.pit : 0),
+      { piece: 'fuse', show: s => dep(s) > 0.02, outer: { pivot: c, axis: [0, 1, 0], angle: s => (D(s) ? D(s).las.yaw : 0) }, offset: s => [0, -0.3 * (1 - dep(s)), 0] })); }
 }
 
 // ===================== aircraft models (low-poly, original designs) =====================
@@ -5711,9 +5821,9 @@ const AC = {
     // tailless: weak natural yaw stiffness, made up by the flight computer working the drag rudders
     CM0: 0.0, CMA: -0.14, CMDE: 0.11, CMQ: -6, CLB: -0.05, CLDA: 0.028, CLP: -0.5, CLR: 0.08, CNB: 0.045, CNDR: 0.014, CNR: -0.13, CNDA: 0.002, CYB: -0.12,
     // four General Electric F118 turbofans, 77 kN each, buried in the wing
-    thrust: (n, V, h, M) => (0.05 + 0.95 * Math.pow(clamp(n, 0, 1), 1.5)) * 308000 * Math.pow(airRho(h) / 1.225, 0.85) * Math.max(0.55, 1 - 0.32 * M),
+    thrust: (n, V, h, M) => (0.05 + 0.95 * Math.pow(clamp(n, 0, 1), 1.3)) * 308000 * Math.pow(airRho(h) / 1.225, 0.75) * Math.max(0.62, 1 - 0.2 * M),   // 4 × 17,300 lbf; ram recovery keeps more of it with speed
     machDrag: M => M < 0.8 ? 0 : 26 * (M - 0.8) ** 2,
-    spool: 0.16, startTime: 18,
+    spool: 0.26, startTime: 18,
     sets: [0], setLabel: 'FLAPS', FCL: [0], FCD: [0], FCM: [0], flapAS: [0],
     gear: [
       { p: [-0.9, -3.12, 6.05], k: 6.2e6, c: 6.0e5, brake: true, piece: 'gear' }, { p: [-0.9, -3.12, -6.05], k: 6.2e6, c: 6.0e5, brake: true, piece: 'gear' },
@@ -7605,6 +7715,7 @@ function audioInit() {
   N.lfB1.connect(N.lfBF); N.lfB2.connect(N.lfBF); N.lfBF.connect(N.lfBG); N.lfBG.connect(bus);
   N.lfAM = osc('sine', 6); N.lfAMg = gain(0); N.lfAM.connect(N.lfAMg); N.lfAMg.connect(N.lfRG.gain);
   N.lfW = osc('sine', 2900); N.lfW2 = osc('sine', 3120); N.lfWG = gain(0); N.lfW.connect(N.lfWG); N.lfW2.connect(N.lfWG); N.lfWG.connect(bus);
+  N.las = osc('sawtooth', 820); N.lasF = filt('bandpass', 1600, 4); N.lasG = gain(0); N.las.connect(N.lasF); N.lasF.connect(N.lasG); N.lasG.connect(bus);   // laser: an electric whine while it burns
   N.starter = osc('sawtooth', 90); N.starterF = filt('bandpass', 400, 3); N.starterG = gain(0); N.starter.connect(N.starterF); N.starterF.connect(N.starterG); N.starterG.connect(bus);
 }
 
@@ -7760,6 +7871,7 @@ function audioUpdate(dt, camDist, cockpit, active) {
   const sv = servoT > 0 && !crashed ? 1 : 0;
   setP(N.servoG.gain, sv * (N.servoK === 'noz' ? 0.16 : 0.11) * (cockpit ? 1 : att * 1.5), 0.04);
   setP(N.servo.frequency, N.servoK === 'noz' ? 260 + st.noz * 120 : N.servoK === 'gear' ? 140 : N.servoK === 'doors' ? 180 + 60 * Math.sin(servoT * 2.1) : 105, 0.05);
+  { const L = st.def && st.def.las; setP(N.lasG.gain, L && L.on && !crashed ? 0.05 * (cockpit ? 1 : att) : 0, 0.05); if (L) setP(N.las.frequency, 780 + 120 * (L.heat || 0), 0.1); }
   // F-35B LiftFan
   { const lf = a.stovl && !crashed ? (st.fan || 0) : 0, load = a.stovl ? clamp((st.lfT || 0) / a.stovl.fanMax, 0, 1) : 0, below = cockpit ? 0.55 : clamp(0.7 + 0.5 * clamp(-ahead, -0.3, 1), 0.5, 1.2);
     setP(N.lfRG.gain, lf * lf * (0.18 + 0.5 * load) * att * below, 0.15); setP(N.lfRF.frequency, (150 + 160 * lf + 120 * load) * Math.sqrt(dop), 0.2);
@@ -9633,7 +9745,7 @@ function stepNavy(dt) {
     if (!mil || !alive || CFG.navy === false) { s.seen = 0; continue; }
     // radar: a jet low over the sea hides in the clutter beyond a few km
     const to = V3.sub(st.pos, s.p), d = V3.len(to), agl = st.pos[1];
-    const stl = a.stealth ? lerp(a.stealth, 0.6, clamp((st.bayK || 0) * 1.5, 0, 1)) : 1;   // stealth shrinks the detection range; open bomb bays give it away
+    const stl = a.stealth ? lerp(a.stealth, 0.6, clamp(Math.max(st.bayK || 0, ((st.def && st.def.dep) || 0) * 0.8) * 1.5, 0, 1)) : 1;   // stealth shrinks the detection range; open bomb bays give it away
     const seen = !s.radarDown && NAVY.t > 25 && d < 16000 * stl && !(agl < 60 && d > 6000 * stl) && !(agl < 25 && d > 2500 * stl);
     s.seen = seen ? s.seen + dt : 0;
     if (seen && !NAVY.told) { NAVY.told = true; ui.toast('WARSHIP RADAR — ' + s.name, a.stealth ? 'They found you at ' + (d / 1000).toFixed(1) + ' km — stealth only hides you so far' : 'You are being tracked. Stay below 60 m over the sea to hide, or attack'); }
@@ -10243,7 +10355,7 @@ function stepSams(dt) {
     if (s.dead) { s.burn -= dt; if (s.burn > 0) { if (Math.random() < dt * 14) spawnFx('fire', V3.add(s.p, [(Math.random() - .5) * 8, 2, (Math.random() - .5) * 8]), [0, 3, 0], 2); if (Math.random() < dt * 4) spawnFx('bsmoke', V3.add(s.p, [0, 6, 0]), [SIM.wind[0] * 0.6, 6, SIM.wind[2] * 0.6], 2); } continue; }
     if (!mil || !alive || CFG.navy === false) { s.seen = 0; continue; }
     const to = V3.sub(st.pos, s.p), d = V3.len(to), agl = st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h;
-    const stl = a.stealth ? lerp(a.stealth, 0.6, clamp((st.bayK || 0) * 1.5, 0, 1)) : 1;
+    const stl = a.stealth ? lerp(a.stealth, 0.6, clamp(Math.max(st.bayK || 0, ((st.def && st.def.dep) || 0) * 0.8) * 1.5, 0, 1)) : 1;
     const seen = d < 26000 * stl && !(agl < 70 && d > 7000 * stl) && !(agl < 30 && d > 3000 * stl);   // terrain masking: fly low to hide
     s.seen = seen ? s.seen + dt : 0; s.cool -= dt;
     if (seen && !SAMS.told) { SAMS.told = true; ui.toast('SAM RADAR — ' + s.name, `${(d / 1000).toFixed(0)} km · go low (under 70 m) to hide, or take it out`); SIM.ev.push({ t: 'lock', v: 0.5 }); }
@@ -10319,9 +10431,10 @@ function ejCamera(dt) {
 }
 
 // ---------- hooks ----------
-function combatReset() { GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.ej = null; st.gunOn = false; if (!EJ.mesh) ejBuildMeshes(); }
-function stepCombat(dt) { stepGun(dt); stepWaves(dt); stepSams(dt); stepEject(dt); }
+function combatReset() { GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.ej = null; st.gunOn = false; if (st.acd.b2) b2defReset(st); else st.def = null; if (!EJ.mesh) ejBuildMeshes(); }
+function stepCombat(dt) { stepB2Def(dt); stepGun(dt); stepWaves(dt); stepSams(dt); stepEject(dt); }
 function drawCombat() {
+  drawB2Def();
   for (const s of SAMS.sites) {
     const yaw = Math.atan2(s.p[0], s.p[2]), q = Q.axis([0, 1, 0], yaw);
     draw(SAMS.mesh, M4.fromQP(q, s.dead ? V3.add(s.p, [0, -0.8, 0]) : s.p, 1), s.dead ? { tint: [0.25, 0.22, 0.2], twoSided: true } : { twoSided: true });
@@ -10336,6 +10449,7 @@ function drawCombat() {
   }
 }
 function combatGlows() {
+  b2defGlows();
   for (const r of GUN.rounds) { const o = r.own || r.friend; DYNG.push([r.p[0], r.p[1], r.p[2], o ? 700 : 760, o ? 1 : 0.4, o ? 0.72 : 1, o ? 0.3 : 0.45, 0, 0, 0]); }
   for (const s of SAMS.sites) if (!s.dead) DYNG.push([s.p[0] + 8, s.p[1] + 9.5, s.p[2] - 8, 900, 1, 0.12, 0.08, 0, 0, Math.sin(s.ang * 3) > 0.6 ? 0 : 0]);
 }
@@ -12706,6 +12820,7 @@ function bindControls() {
     c.rev = !c.rev; SIM.ev.push({ t: 'clunk', k: 'gear' }); if (c.rev) ui.toast('REVERSE THRUST', 'Raise POWER for more reverse — stow by 60 kt'); updSys(); });
   tap('sCarb', () => { SIM.ctl.carbHeat = !SIM.ctl.carbHeat; SIM.ev.push({ t: 'click' }); updSys(); });
   tap('bMsl', () => { fireStore('m'); updWpn(); });
+  tap('bDef', () => { const d = SIM.st.def; if (!d) return; d.arm = !d.arm; SIM.ev.push({ t: 'click' }); ui.toast(d.arm ? 'DEFENSIVE SUITE ARMED' : 'DEFENSIVE SUITE STOWED', d.arm ? 'Turrets and laser fire on their own at missiles and bandits' : 'Weapons hold — turrets down, stealthy again'); updWpn(); });
   tap('bBomb', () => { fireStore('b'); updWpn(); });
   { const gb = $('bGun'), on = v => e => { e.preventDefault(); e.stopPropagation(); SIM.st.gunOn = v; gb.classList.toggle('armed', v); };   // hold to fire
     gb.addEventListener('pointerdown', on(true)); for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) gb.addEventListener(ev, on(false)); }
@@ -13264,6 +13379,7 @@ function updWpn() {
   $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.r ? S.r.filter(Boolean).length + '+' + S.m.filter(Boolean).length : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : S.b.filter(Boolean).length;
   $('bMsl').style.display = S.m.length ? '' : 'none';
   $('bBomb').style.display = S.lo === 'aa' ? 'none' : '';
+  $('bDef').style.display = SIM.st.def ? '' : 'none'; if (SIM.st.def) { $('bDefV').textContent = SIM.st.def.arm ? 'AUTO' : 'HOLD'; $('bDef').classList.toggle('armed', !!SIM.st.def.arm); }
   $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) ? '' : 'none';
   $('bNuke').style.display = S.n ? '' : 'none'; if (S.n) $('bNukeV').textContent = CFG.unlimitedWpn ? '∞' : S.n.filter(Boolean).length;
 }
