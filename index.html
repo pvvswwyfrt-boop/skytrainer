@@ -308,6 +308,7 @@ html,body{width:100%;height:100%;background:#0b1a33}
 <script src="f35data.js"></script>
 <script src="cvndata.js"></script>
 <script src="f35bdata.js"></script>
+<script src="f35bgdata.js"></script>
 <script src="vox.js"></script>
 <script>
 (() => {
@@ -447,13 +448,15 @@ function initGL(canvas) {
     float h21(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
     float vn(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
       return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y); }
-    // the aircraft's own shadow (wings on the fuselage, the canopy rail on the cockpit): sun-view depth map, 2x2 soft taps
+    // the aircraft's own shadow (wings on the fuselage, the canopy rail on the cockpit): sun-view depth map, 2x2 soft taps.
+    // The lookup is pushed ~4.5 cm out along the surface normal (normal-offset shadows): thin parts like the fins and flaps
+    // no longer shadow themselves, which made them shimmer as the shadow map re-rasterised every frame
     float acShadow(vec3 n) {
       if (uSMOn < 0.5) return 1.0;
       #ifdef GL_FRAGMENT_PRECISION_HIGH
-      highp vec4 p = uLM * vec4(vHP, 1.0); highp vec3 q = p.xyz * 0.5 + 0.5;
+      highp vec4 p = uLM * vec4(vHP + n * 0.045, 1.0); highp vec3 q = p.xyz * 0.5 + 0.5;
       #else
-      vec4 p = uLM * vec4(vHP, 1.0); vec3 q = p.xyz * 0.5 + 0.5;
+      vec4 p = uLM * vec4(vHP + n * 0.045, 1.0); vec3 q = p.xyz * 0.5 + 0.5;
       #endif
       if (q.x < 0.0 || q.y < 0.0 || q.x > 1.0 || q.y > 1.0 || q.z > 1.0) return 1.0;
       float ndl = clamp(dot(n, uSunDir), 0.0, 1.0), bias = 0.0012 + 0.004 * (1.0 - ndl), s = 0.0;
@@ -894,6 +897,9 @@ function initGL(canvas) {
           vec3 tn = texture2D(uNM, vUV).xyz * 2.0 - 1.0;
           n = normalize(t * tn.x + b * tn.y + n * max(tn.z, 0.2));
           vec3 rm = texture2D(uRM, vUV).rgb; rough = clamp(rm.r, 0.08, 1.0); metal = rm.g;
+          // specular anti-aliasing: where the mip-mapped normal map averages many panel lines into one pixel its normal gets
+          // shorter (Toksvig); widen the highlight to match, and a little more with distance, so tails and wings don't sparkle
+          float lnm = max(length(tn), 0.1); rough = clamp(sqrt(rough * rough + (1.0 - lnm) / lnm * 1.6 + min(length(vRel) / 900.0, 0.12)), 0.08, 1.0);
           cav = mix(0.42, 1.0, rm.b);   // panel lines, seams and recesses (cavity map) catch less light
         }
         if (uMode > 3.5) {   // the ground ends exactly where the water begins (same heightmap test as the sea): no overlap, so no flicker along the coast or in the shallows
@@ -5672,6 +5678,38 @@ const AC = {
     tips: 'Throttle past 85% lights the afterburner. Rotate at 150 kt and raise the gear. One big engine: quick to Mach 1.6, but it does not supercruise like the Raptor. Fly-by-wire lets you pull up to 50° angle of attack. Weapons ride inside to stay stealthy.',
     help: 'A single F135 engine, the most powerful fighter engine in service: the top 15% of the throttle is afterburner. Fly-by-wire limits you to 9 G and 50° angle of attack. Top speed is about Mach 1.6. It is hard to see on radar, so SAM batteries and warships find you later than other fighters. Missiles and bombs are carried in internal bays; the 25 mm gun is in the left wing root. 3D model: “F-35A Lightning II” by shangus930 (CC BY 4.0).',
   },
+  f35b: {
+    key: 'f35b', name: 'F-35B Lightning II', sub: 'STOVL stealth fighter — hovers', kind: 'fixed', build: buildF35B, fbw: true, gLim: 7, retract: true, canopy: true, f35: true, f35b: true, abT: 0.85, stealth: 0.2, irK: 0.75,
+    weapons: { m: [[0.4, -0.75, -0.95], [0.4, -0.75, 0.95]], b: [[0.2, -0.95, -0.6], [0.2, -0.95, 0.6]] },   // shorter internal bays than the A: 2 AIM-120 + 2 × 1,000 lb
+    // 32,300 lb empty, 13,500 lb internal fuel (the lift fan takes a third of the A's fuel volume)
+    mass: 14650, fuelMax: 6125, tsfc: M => 2.05e-5 * (1 + 0.2 * Math.min(M, 1.6)) + (SIM.st.ab || 0) * 3.4e-5, idleFF: 0.15, negG: -3, I: [30000, 160000, 175000],
+    S: 42.7, b: 10.7, c: 4.6, CD0: 0.0195, K: 0.18, CL0: 0.05, CLA: 3.5, AS: 26 * D2R, stallSlope: 1.1, fbwAoA: 50 * D2R, aoaFlame: 1.4,
+    CM0: 0.0, CMA: -0.34, CMDE: 0.32, CMQ: -8.5, CLB: -0.06, CLDA: 0.06, CLP: -0.34, CLR: 0.06, CNB: 0.13, CNDR: 0.035, CNR: -0.22, CNDA: 0, CYB: -0.8,
+    // F135-PW-600: 26,000 lbf dry, 38,000 lbf in afterburner (no afterburner in STOVL mode)
+    thrust: (thr, V, h, M = 0) => {
+      const st = SIM.st, sig = airRho(h) / 1.225, ram = 1 + 0.28 * Math.min(M, 1.4) - 0.3 * Math.max(0, M - 1.5);
+      return (116000 * Math.min(1, thr / 0.85) + 53000 * (st.ab || 0)) * Math.pow(sig, 0.74) * ram;
+    },
+    machDrag: M => M < 0.85 ? 0 : M < 1.1 ? 0.032 * smooth(0.85, 1.1, M) : 0.04 * Math.max(0.7, 1.1 / M) + 0.14 * Math.max(0, M - 1.45) ** 2,
+    spool: 0.75, startTime: 7,
+    // STOVL lift system (Rolls-Royce): LiftFan 20,000 lbf at 3.5 m ahead of the CG, 3BSM 18,000 lbf (+ auxiliary-inlet boost),
+    // roll posts 1,950 lbf each in the wings; doors ~6 s, clutch spin-up ~4.5 s; throttle hover mark at 20%
+    stovl: { fanX: 3.53, fanY: -0.6, fanMax: 89000, bsmMax: 84500, rpMax: 8670, rpZ: 2.75, rpX: -1.58, doorT: 6, fanT: 4.5, det: 0.2 },
+    sets: [0, 20], setLabel: 'MODE', FCL: [0, 0.34], FCD: [0, 0.05], FCM: [0, -0.02], flapAS: [0, 0], flapRate: 12,
+    gear: [
+      { p: [-1.64, -2.26, 2.11], k: 900000, c: 110000, brake: true, piece: 'gear' }, { p: [-1.64, -2.26, -2.11], k: 900000, c: 110000, brake: true, piece: 'gear' },
+      { p: [4.68, -2.27, 0], k: 320000, c: 36000, steer: true, piece: 'gear' }],
+    hard: [
+      { p: [8.5, -0.1, 0], piece: 'fuse', kind: 'fuse', n: 'Nose' }, { p: [5.6, 1.2, 0], piece: 'fuse', kind: 'fuse', n: 'Canopy' },
+      { p: [2.0, -1.1, 0], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.8, -1.1, 0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.8, -1.1, -0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' },
+      { p: [-5.3, -0.55, 0], piece: 'fuse', kind: 'tail', n: 'Nozzle strike' },
+      { p: [-2.1, -0.1, 5.3], piece: 'wingR', kind: 'wing', n: 'Right wing' }, { p: [-2.1, -0.1, -5.3], piece: 'wingL', kind: 'wing', n: 'Left wing' },
+      { p: [-6.4, -0.05, 3.2], piece: 'tail', kind: 'tail', n: 'Tailplane' }, { p: [-6.4, -0.05, -3.2], piece: 'tail', kind: 'tail', n: 'Tailplane' },
+      { p: [-5.9, 2.45, 2.3], piece: 'fuse', kind: 'tail', n: 'Fin' }, { p: [-5.9, 2.45, -2.3], piece: 'fuse', kind: 'tail', n: 'Fin' }],
+    collapse: 4.2, camDist: 26, airSpawn: 150, airThr: 0.7,
+    tips: 'MODE converts between CTOL (a normal jet) and STOVL. In STOVL the throttle sets your ground speed: the 20% mark is a hover, below it you back up, above it you move forward (up to 250 kt). Pull the stick to rise, push to sink; it holds height hands-off. Sideways stick banks to slide, rudder turns. Vertical take-off: STOVL, wait for LIFTFAN LOCKED, then pull back. Short take-off: STOVL, throttle up, pull back at about 60 kt. It is heavy: hover with 30–40% fuel; the HMD shows your hover margin.',
+    help: 'The F-35B is the short take-off / vertical landing Lightning II used by the US Marines, the UK, Italy and Japan. A shaft from the F135 drives a 50-inch two-stage counter-rotating LiftFan behind the cockpit (20,000 lbf), the 3-bearing swivel nozzle turns the exhaust down through 95° in 2.5 s (18,000 lbf), and roll posts in each wing hold it level. Selecting STOVL opens the doors in sequence (lift-fan door, auxiliary inlets, fan exit doors, swivel-nozzle doors, roll posts), then a clutch spins the fan up to engine speed and locks it. The unified control law then flies the thrust: throttle = speed, stick = climb rate and bank, as in the real jet. No afterburner in STOVL, 7 G and Mach 1.6 in CTOL, no gun (it carries a pod), no tailhook. 3D model: “Lockheed Martin F-35B Lightning II” by AF267 (CC BY 4.0); pilot from “F-35A Lightning II” by shangus930 (CC BY 4.0).',
+  },
   b2: {
     key: 'b2', name: 'B-2 Spirit', sub: 'Stealth bomber · nuclear & conventional', kind: 'fixed', build: buildB2, b2: true, fbw: true, gLim: 2.5, fbwAoA: 13 * D2R, retract: true, airbrake: true,
     stealth: 0.14, irK: 0.4,   // radar sees it at ~14% of the usual range; buried engines and cooled exhaust: a weak heat target
@@ -6164,7 +6202,7 @@ function b7decode(group, D = B737D) {
     if (t) for (let i = 0; i < nv * 2; i++) uv[i] = t[i] / 16384;
     let tan = null;
     if (tg) { tan = new Float32Array(nv * 4); for (let i = 0; i < nv * 4; i++) tan[i] = tg[i] / 127; }
-    return { pos, nor, uv, tan, tex: e.x, col: e.c, nv };
+    return { pos, nor, uv, tan, tex: e.x, col: e.c, nv, m: e.m };
   }));
 }
 // one builder per chunk; colour/material picked from what the chunk is
@@ -6429,7 +6467,7 @@ function buildF22() {
   // exterior lights, kept small and dim the way they really are (they're for other pilots, not for show):
   //   red/green position lights in the wingtips, a white tail light, red anti-collision flashers at the tops of both fins,
   //   low-intensity green formation strips (fins, wingtips, forward fuselage), and the landing/taxi light on the nose gear
-  const fb = b7bounds('finR', D), finTop = [fb.mn[0] + (fb.mx[0] - fb.mn[0]) * 0.32, fb.mx[1] - 0.05, fb.mx[2] - 0.04];
+  const fb = b7bounds('finR', D), finTop = [fb.mn[0] + (fb.mx[0] - fb.mn[0]) * 0.32, fb.mx[1] + 0.04, fb.mx[2] + 0.1];   // just clear of the fin skin, so the glow is never half-buried in it (it popped in and out)
   const lights = navLights([-2.35, -0.05, 6.42], [-8.0, 0.02, 0], finTop);
   lights.noBeacon = true;
   lights.extra = [{ k: 'land', p: [5.36, -0.9, 0], c: [1, 0.96, 0.88], size: 1600, gear: true },
@@ -6512,7 +6550,427 @@ function buildF35() {
   const wb = b7bounds('wingR', D), fb = b7bounds('fuse', D);
   const lights = navLights([wb.c[0] - 0.4, wb.c[1], wb.mx[2] - 0.05], [fb.mn[0] + 0.3, 0.1, 0], [-1.0, fb.mx[1] - 1.3, 0]);
   lights.extra = [{ k: 'land', p: [META.gearN.x, -1.2, 0], c: [1, 0.96, 0.88], size: 2400, gear: true }, { k: 'strobe', p: [wb.c[0] - 0.4, wb.c[1], wb.mx[2]], c: [1, 1, 1], wing: 1 }, { k: 'strobe', p: [wb.c[0] - 0.4, wb.c[1], -wb.mx[2]], c: [1, 1, 1], wing: -1 }];
-  return { parts, pieces, lights, eye: META.eye, len: 15.7, span: 10.7 };
+  return { parts, pieces, lights, eye: META.eye, len: 15.7, span: 10.7, hmd: true };   // HMDS: symbology on the helmet visor, no HUD glass
+}
+
+// ===================== Lockheed Martin F-35B Lightning II (STOVL) =====================
+// Built on the F-35A model (F35D) with the B's lift system cut into it:
+//   - the big aft-hinged lift-fan door behind the canopy (opens 65° below ~170 kt, 35° above) and the 50-inch
+//     two-stage counter-rotating Rolls-Royce LiftFan under it, with inlet guide vanes and the vane-box nozzle below
+//   - the two dorsal auxiliary-inlet doors (more air for the engine in the hover)
+//   - the lower lift-fan doors, the 3-bearing swivel module (3BSM) doors under the tail, the roll-post doors in the wings
+//   - the 3BSM itself: the engine nozzle swings down through 95° on two bearing joints (2.5 s end to end)
+// Every door panel is the jet's own skin, cut out of the model along the door outline, so it opens and closes flush.
+// Numbers (Rolls-Royce LiftSystem): LiftFan 20,000 lbf, 3BSM 18,000 lbf, roll posts 1,950 lbf each.
+const F35B = { J1: [-3.45, 0.017, 0], SEG: 0.55, NOZ: 1.37, FAN: [3.529, 0.651, 0], FANR: 0.53,
+  RP: { x0: -1.85, x1: -1.3, z0: 2.55, z1: 2.95 } };
+// split one decoded group into new groups. Each cut is a box in x/z (+ a test on the face normal / height): triangles
+// that straddle its edges are clipped exactly along them (all vertex attributes interpolated), so a door comes out of the
+// skin with clean straight edges; the leftovers become '<group>#rest'
+function b7split(D, group, cuts) {
+  D._dec = D._dec || {};
+  if (D._dec[group + '#rest']) return;
+  const names = Object.keys(cuts), outs = {}; for (const k of names) outs[k] = [];
+  const rest = [];
+  const lerpV = (a, b, t) => a.map((v, i) => v + (b[i] - v) * t);
+  const clip = (poly, ax, val, keepGreater) => {
+    const o = [];
+    for (let i = 0; i < poly.length; i++) {
+      const A = poly[i], Bv = poly[(i + 1) % poly.length], da = (A[ax] - val) * (keepGreater ? 1 : -1), db = (Bv[ax] - val) * (keepGreater ? 1 : -1);
+      if (da >= 0) o.push(A);
+      if ((da >= 0) !== (db >= 0)) o.push(lerpV(A, Bv, da / (da - db)));
+    }
+    return o;
+  };
+  for (const ch of b7decode(group, D)) {
+    const nu = ch.uv ? 2 : 0, nt = ch.tan ? 4 : 0, per = {}; for (const k of names) per[k] = []; const keep = [];
+    const vtx = j => { const v = [ch.pos[j * 3], ch.pos[j * 3 + 1], ch.pos[j * 3 + 2], ch.nor[j * 3], ch.nor[j * 3 + 1], ch.nor[j * 3 + 2]];
+      if (nu) v.push(ch.uv[j * 2], ch.uv[j * 2 + 1]); if (nt) v.push(ch.tan[j * 4], ch.tan[j * 4 + 1], ch.tan[j * 4 + 2], ch.tan[j * 4 + 3]); return v; };
+    const emit = (list, poly) => { for (let i = 1; i + 1 < poly.length; i++) list.push(poly[0], poly[i], poly[i + 1]); };
+    for (let t = 0; t < ch.nv / 3; t++) {
+      let tri = [vtx(t * 3), vtx(t * 3 + 1), vtx(t * 3 + 2)];
+      const c = [0, 1, 2].map(k => (tri[0][k] + tri[1][k] + tri[2][k]) / 3), n = V3.norm(V3.cross(V3.sub(tri[1].slice(0, 3), tri[0].slice(0, 3)), V3.sub(tri[2].slice(0, 3), tri[0].slice(0, 3))));
+      let pieces = [tri];
+      for (const k of names) {
+        const C = cuts[k], next = [];
+        for (const pc of pieces) {
+          const cc = [0, 1, 2].map(j => pc.reduce((s, v) => s + v[j], 0) / pc.length);
+          const mnx = Math.min(...pc.map(v => v[0])), mxx = Math.max(...pc.map(v => v[0])), mnz = Math.min(...pc.map(v => v[2])), mxz = Math.max(...pc.map(v => v[2]));
+          const z0 = C.z0 != null ? C.z0 : -1e9, z1 = C.z1 != null ? C.z1 : 1e9, x0 = C.x0 != null ? C.x0 : -1e9, x1 = C.x1 != null ? C.x1 : 1e9;
+          if (!C.test(cc, n) || mxx <= x0 || mnx >= x1 || mxz <= z0 || mnz >= z1) { next.push(pc); continue; }
+          let inside = pc;
+          for (const [ax, val, g] of [[0, x0, true], [0, x1, false], [2, z0, true], [2, z1, false]]) {
+            if (Math.abs(val) > 1e8) continue;
+            const out = clip(inside, ax, val, !g); if (out.length >= 3) next.push(out);
+            inside = clip(inside, ax, val, g); if (inside.length < 3) break;
+          }
+          if (inside.length >= 3) emit(per[k], inside);
+        }
+        pieces = next;
+      }
+      for (const pc of pieces) emit(keep, pc);
+    }
+    const sub = verts => {
+      const nv = verts.length, o = { pos: new Float32Array(nv * 3), nor: new Float32Array(nv * 3), uv: nu ? new Float32Array(nv * 2) : null, tan: nt ? new Float32Array(nv * 4) : null, tex: ch.tex, col: ch.col, m: ch.m, nv };
+      verts.forEach((v, d) => { for (let k = 0; k < 3; k++) { o.pos[d * 3 + k] = v[k]; o.nor[d * 3 + k] = v[3 + k]; }
+        if (nu) { o.uv[d * 2] = v[6]; o.uv[d * 2 + 1] = v[7]; } if (nt) for (let k = 0; k < 4; k++) o.tan[d * 4 + k] = v[6 + nu + k]; });
+      return o;
+    };
+    for (const k of names) if (per[k].length) outs[k].push(sub(per[k]));
+    if (keep.length) rest.push(sub(keep));
+  }
+  D._dec[group + '#rest'] = rest;
+  for (const k of names) D._dec[k] = outs[k];
+}
+// the inside face of a door panel: the same triangles, reversed and pushed in a little, in primer grey
+function doorInner(D, group, col = [0.62, 0.63, 0.6]) {
+  const mb = AMB();
+  for (const ch of b7decode(group, D)) for (let t = 0; t < ch.nv / 3; t++) {
+    const P = k => [ch.pos[(t * 3 + k) * 3], ch.pos[(t * 3 + k) * 3 + 1], ch.pos[(t * 3 + k) * 3 + 2]];
+    const a = P(0), b = P(1), c = P(2), n = V3.norm(V3.cross(V3.sub(b, a), V3.sub(c, a))), o = V3.mul(n, -0.025);
+    mb.tri(V3.add(a, o), V3.add(c, o), V3.add(b, o), col);
+  }
+  return mb;
+}
+// where the 3BSM nozzle exit is for a swivel angle th (body frame, x forward, y up)
+function bsmExit(th) {
+  const J = F35B.J1, a = th / 2;
+  return [J[0] - F35B.SEG * Math.cos(a) - F35B.NOZ * Math.cos(th), J[1] - F35B.SEG * Math.sin(a) - F35B.NOZ * Math.sin(th)];
+}
+function buildF35B() {
+  const D = F35BG, M = D.meta, parts = [], texs = D.tex.map(t => loadTex(t));
+  texs.maps = [loadTex(D.maps[0]), loadTex(D.maps[1])];
+  const Z = () => 0, O = [0, 0, 0], Y = [0, 1, 0], S = s => s.st || {};
+  const matFor = ch => /window/.test(ch.m || '') ? 2 : 0;
+  const add = (group, piece, pivot, axis, angle, opts = {}) => { for (const mb of b7meshes(group, texs, matFor, D)) parts.push(part(mb, pivot, axis, angle, { piece, ...opts })); };
+  const H = (name, piece, angle, opts = {}, inner) => { const h = M[name]; add(name, piece, h.pivot, h.axis, angle, opts);
+    if (inner) parts.push(part(doorInner(D, name, inner), h.pivot, h.axis, angle, { piece, outer: opts.outer, show: s => angle(s) > 0.01 })); };   // doors are single skins: give them an inside
+  const Rp = F35B.RP;
+  // wings come off in a crash; the roll-post doors are cut out of their undersides
+  b7split(D, 'fuselage', {
+    'b:rpR': { x0: Rp.x0, x1: Rp.x1, z0: Rp.z0, z1: Rp.z1, test: (c, n) => n[1] < -0.3 }, 'b:rpL': { x0: Rp.x0, x1: Rp.x1, z0: -Rp.z1, z1: -Rp.z0, test: (c, n) => n[1] < -0.3 },
+    'b:wingR': { z0: 2.25, test: () => true }, 'b:wingL': { z1: -2.25, test: () => true },
+  });
+  add('fuselage#rest', 'fuse', O, Y, Z); add('extras', 'fuse', O, Y, Z, { twoSided: true }); add('vertStab', 'fuse', O, Y, Z);
+  add('b:wingR', 'wingR', O, Y, Z); add('b:wingL', 'wingL', O, Y, Z);
+  const pitchCmd = s => clamp((s.st.elev != null ? s.st.elev : s.pitch), -1, 1), rollCmd = s => clamp(s.roll, -1, 1), yawCmd = s => clamp(s.yaw || 0, -1, 1);
+  const lefK = s => clamp(((s.st.alpha || 0) - 0.06) * 1.6, 0, 0.45) + (S(s).conv || 0) * 0.1;   // leading-edge flaps droop with angle of attack
+  for (const [sd, sg, wing] of [['right', 1, 'wingR'], ['left', -1, 'wingL']]) {
+    H(sd + 'Elevator', 'tail', s => -pitchCmd(s) * 0.38 - sg * rollCmd(s) * 0.13);
+    H(sd + 'Flaperon', wing, s => -sg * rollCmd(s) * 0.3 + Math.min(1, (s.flap || 0) / 20) * 0.42);
+    H(sd + 'Slat', wing, s => -lefK(s));
+    H(sd + 'Rudder', 'fuse', s => yawCmd(s) * 0.45 * (1 - 0.6 * clamp(((s.st.tas || 0) - 120) / 150, 0, 1)) + (S(s).onGround ? 0 : 0));
+    // STOVL doors
+    H(sd + 'ExhaustDoor', 'fuse', s => (S(s).adoor || 0) * 1.15, {}, [0.6, 0.61, 0.58]);     // dorsal auxiliary inlets
+    H(sd + 'LiftDoor', 'fuse', s => (S(s).ldoor || 0) * 1.4, {}, [0.6, 0.61, 0.58]);         // lift-fan exit doors
+    H(sd + 'EngineDoor', 'fuse', s => (S(s).bdoor || 0) * 1.45, {}, [0.6, 0.61, 0.58]);      // 3BSM doors
+    // landing gear: legs fold forward into the fuselage sides; doors open while it moves
+    const g = M[sd + 'Gear'], fold = { pivot: g.pivot, axis: g.axis, angle: s => g.ang * (1 - s.gear) }, comp = s => [0, Math.min(0.22, (s.comp && s.comp[sg > 0 ? 0 : 1]) || 0), 0];
+    for (const n of ['Gear', 'Piston', 'StrutT']) add(sd + n, 'gear', O, Y, Z, { outer: fold, show: s => s.gear > 0.02 });
+    for (const n of ['Suspension', 'StrutB', 'Wheel']) add(sd + n, 'gear', O, Y, Z, { outer: fold, offset: comp, show: s => s.gear > 0.02 });
+    H(sd + 'Door', 'gear', s => 1.45 * clamp(s.gear * 2.5, 0, 1), {}, [0.82, 0.82, 0.8]);
+    H(sd + 'NoseDoor', 'gear', s => 1.35 * clamp(s.gear * 2.5, 0, 1), {}, [0.82, 0.82, 0.8]);
+  }
+  { const g = M.noseGear, fold = { pivot: g.pivot, axis: g.axis, angle: s => g.ang * (1 - s.gear) };
+    const steer = { pivot: [4.66, 0, 0], axis: Y, angle: s => s.gear > 0.99 ? -clamp(s.yaw, -1, 1) * 0.5 * clamp(1 - (s.st.tas || 0) / 40, 0.12, 1) : 0 };
+    for (const n of ['noseGear', 'nosePiston', 'noseStrutT']) add(n, 'gear', O, Y, Z, { outer: fold, show: s => s.gear > 0.02 });
+    for (const n of ['noseSuspension', 'noseStrutB', 'noseWheel']) add(n, 'gear', O, Y, Z, { outer: [fold, steer], offset: s => [0, Math.min(0.2, (s.comp && s.comp[2]) || 0), 0], show: s => s.gear > 0.02 }); }
+  // the big aft-hinged lift-fan door: 65° open below ~170 kt, 35° above
+  H('topLiftDoor', 'fuse', s => S(s).fdoor || 0, {}, [0.62, 0.63, 0.6]);
+  add('ladderDoor', 'fuse', O, Y, Z);
+  // canopy: hinged at the front
+  { const h = M.canopy; for (const ch of b7decode('canopy', D)) {
+      const glass = /window/.test(ch.m || ''), mb = new MB(), d = mb.d, col = glass ? [0.22, 0.17, 0.09] : ch.col;
+      for (let i = 0; i < ch.nv; i++) d.push(ch.pos[i * 3], ch.pos[i * 3 + 1], ch.pos[i * 3 + 2], ch.nor[i * 3], ch.nor[i * 3 + 1], ch.nor[i * 3 + 2], col[0], col[1], col[2], glass ? 2 : 0);
+      parts.push(part(mb, h.pivot, h.axis, s => (s.st.canopy || 0) * h.ang, glass ? { piece: 'fuse', alpha: s => s.inside ? 0.08 : 0.45, twoSided: true } : { piece: 'fuse', twoSided: true })); } }
+  // cockpit: seat, panel (with the big touchscreen picture), sidestick and throttle that move with you, pedals
+  const ckGroups = ['Cube', 'Cube.001', 'Cube.002', 'Cube.003', 'Cube.004', 'Cube.005', 'Cube.006', 'Cube.007', 'Cube.008', 'Cube.009', 'Cube.010', 'Cube.011', 'Cube.012', 'Cube.013', 'Cube.014', 'Cube.015', 'Cube.016', 'Cube.017', 'Cube.018',
+    'Cylinder', 'Cylinder.001', 'Cylinder.002', 'Cylinder.003', 'Cylinder.004', 'Cylinder.005', 'panel', 'Plane', 'parkingBrake', 'gearLever', 'vtolLever', 'rpmDial', 'rpmDial2', 'rpmDialVtol', 'throttleDial'];
+  for (const g of ckGroups) if (D.g[g]) add(g, 'fuse', O, Y, Z, { twoSided: true, lift: 0.25 });
+  add('stick', 'fuse', [5.6, 0.34, 0.3], [0, 0, 1], s => -pitchCmd(s) * 0.2, { lift: 0.25, outer: { pivot: [5.6, 0.34, 0.3], axis: [1, 0, 0], angle: s => rollCmd(s) * 0.2 } });
+  add('throttle', 'fuse', [5.36, 0.34, -0.3], [0, 0, 1], s => ((s.thr || 0) - 0.5) * 0.5, { lift: 0.25 });
+  add('rightPedal', 'fuse', O, Y, Z, { lift: 0.25, offset: s => [-yawCmd(s) * 0.04, 0, 0] }); add('leftPedal', 'fuse', O, Y, Z, { lift: 0.25, offset: s => [yawCmd(s) * 0.04, 0, 0] });
+  // the pilot (from the F-35A model), sat in the B's seat; hidden when you are him
+  { const off = () => [-1.3, 0.384, 0];
+    for (const mb of b7meshes('pilot', F35D.tex.map(t => loadTex(t)), () => 0, F35D)) parts.push(part(mb, O, Y, Z, { piece: 'fuse', offset: off, show: s => !s.inside }));
+    for (const ch of b7decode('visor', F35D)) { const mb = new MB(), d = mb.d;
+      for (let i = 0; i < ch.nv; i++) d.push(ch.pos[i * 3], ch.pos[i * 3 + 1], ch.pos[i * 3 + 2], ch.nor[i * 3], ch.nor[i * 3 + 1], ch.nor[i * 3 + 2], 0.05, 0.05, 0.06, 2);
+      parts.push(part(mb, O, Y, Z, { piece: 'fuse', offset: off, alpha: () => 0.75, twoSided: true, show: s => !s.inside })); } }
+  // ---- cavities behind the doors: dark walls, so you look into the jet and not through it
+  const DK = [0.08, 0.085, 0.09], MID = [0.18, 0.19, 0.2], F = F35B.FAN, R = F35B.FANR, CONV = s => (S(s).conv || 0) > 0.003;
+  { const cav = new MB();
+    // lift-fan inlet: from the door opening down to the fan face
+    const x0 = 2.76, x1 = 4.3, z = 0.6, y0 = F[1] + 0.09, yt = 1.12;
+    cav.quad([x1, y0, -z], [x1, y0, z], [x1, yt, z], [x1, yt, -z], DK); cav.quad([x0, y0, -z], [x0, y0, z], [x0, yt, z], [x0, yt, -z], DK);
+    for (const sg of [1, -1]) cav.quad([x0, y0, sg * z], [x1, y0, sg * z], [x1, yt - 0.1, sg * z], [x0, yt - 0.1, sg * z], MID);
+    const N = 40, rect = a => { const dx = Math.cos(a), dz = Math.sin(a), tx = dx > 0 ? (x1 - F[0]) / dx : dx < 0 ? (x0 - F[0]) / dx : 1e9, tz = dz ? z / Math.abs(dz) : 1e9, t = Math.min(tx, tz); return [F[0] + dx * t, y0, dz * t]; };
+    for (let i = 0; i < N; i++) { const a0 = i / N * Math.PI * 2, a1 = (i + 1) / N * Math.PI * 2;
+      cav.quad([F[0] + Math.cos(a0) * R, y0, Math.sin(a0) * R], [F[0] + Math.cos(a1) * R, y0, Math.sin(a1) * R], rect(a1), rect(a0), DK); }
+    // fan duct down to the exit doors
+    for (let i = 0; i < 36; i++) { const a0 = i / 36 * Math.PI * 2, a1 = (i + 1) / 36 * Math.PI * 2, P = (a, y) => [F[0] + Math.cos(a) * (R + 0.01), y, Math.sin(a) * (R + 0.01)];
+      cav.quad(P(a0, y0), P(a1, y0), P(a1, -0.66), P(a0, -0.66), [0.15, 0.155, 0.16]); }
+    // auxiliary inlet behind its doors
+    { const xa = 0.7, xb = 1.92, za = 0.53, yb = 0.35;
+      cav.quad([xa, yb, -za], [xb, yb, -za], [xb, yb, za], [xa, yb, za], DK); cav.quad([xa, yb, -za], [xa, yb, za], [xa, 0.9, za], [xa, 0.9, -za], DK); cav.quad([xb, yb, -za], [xb, yb, za], [xb, 1.0, za], [xb, 1.0, -za], DK);
+      for (const sg of [1, -1]) cav.quad([xa, yb, sg * za], [xb, yb, sg * za], [xb, 0.82, sg * za], [xa, 0.82, sg * za], MID); }
+    parts.push(part(cav, O, Y, Z, { piece: 'fuse', twoSided: true, show: CONV }));
+    // the 3BSM bay over the tail doors
+    const bay = new MB(), bx0 = -4.66, bx1 = -3.33, bz = 0.68, by = 0.55;
+    for (const sg of [1, -1]) bay.quad([bx0, -0.7, sg * bz], [bx1, -0.7, sg * bz], [bx1, by, sg * bz], [bx0, by, sg * bz], DK);
+    bay.quad([bx1, -0.7, -bz], [bx1, -0.7, bz], [bx1, by, bz], [bx1, by, -bz], DK);
+    parts.push(part(bay, O, Y, Z, { piece: 'fuse', twoSided: true, show: s => (S(s).bdoor || 0) > 0.02 }));
+    // roll-post nozzles in the wing roots, under their little doors
+    const rp = new MB(); for (const sg of [1, -1]) { const cx = (Rp.x0 + Rp.x1) / 2, cz = sg * (Rp.z0 + Rp.z1) / 2;
+      for (let i = 0; i < 16; i++) { const a0 = i / 16 * Math.PI * 2, a1 = (i + 1) / 16 * Math.PI * 2; rp.tri([cx, -0.08, cz], [cx + Math.cos(a0) * 0.2, -0.08, cz + Math.sin(a0) * 0.15], [cx + Math.cos(a1) * 0.2, -0.08, cz + Math.sin(a1) * 0.15], DK); } }
+    parts.push(part(rp, O, Y, Z, { piece: 'fuse', twoSided: true, show: s => (S(s).rdoor || 0) > 0.02 }));
+    for (const [g, sg, wing] of [['b:rpR', 1, 'wingR'], ['b:rpL', -1, 'wingL']]) { const pv = [0, -0.1, sg * Rp.z0], ax = [sg, 0, 0], an = s => (S(s).rdoor || 0) * 1.3;
+      add(g, wing, pv, ax, an); parts.push(part(doorInner(D, g), pv, ax, an, { piece: wing, show: s => an(s) > 0.01 })); }
+  }
+  // ---- the LiftFan (the model's own blisk) spinning, a counter-rotating second stage under it, blur, and the vane box
+  { const c = M.fan.c, spin = s => S(s).lfA || 0;
+    add('fan', 'fuse', c, Y, spin, { show: CONV });
+    const st2 = AMB(), MET = [0.5, 0.51, 0.53];
+    for (let i = 0; i < 26; i++) { const a = i / 26 * Math.PI * 2, d = [Math.cos(a), 0, Math.sin(a)], t = [-Math.sin(a), 0, Math.cos(a)], y = c[1] - 0.24;
+      const c0 = V3.add([c[0], y, 0], V3.mul(d, 0.18)), c1 = V3.add([c[0], y, 0], V3.mul(d, R - 0.02)), tw = V3.add(V3.mul(t, 0.07), [0, -0.06, 0]);
+      st2.quad(V3.sub(c0, tw), V3.add(c0, tw), V3.add(c1, tw), V3.sub(c1, tw), MET, () => [0, 1, 0]); st2.quad(V3.sub(c0, tw), V3.sub(c1, tw), V3.add(c1, tw), V3.add(c0, tw), MET, () => [0, -1, 0]); }
+    rev(st2, [c[0], c[1] - 0.2, 0], [0, -1, 0], [[0, 0.18], [0.08, 0.18], [0.14, 0]], 18, [0.32, 0.32, 0.34]);
+    parts.push(part(st2, c, Y, s => -spin(s) * 0.93, { piece: 'fuse', show: CONV }));
+    const blur = AMB(); rev(blur, [c[0], c[1] + 0.02, 0], [0, -1, 0], [[0, 0.16], [0.001, R]], 32, [0.3, 0.31, 0.32]);
+    parts.push(part(blur, O, Y, Z, { piece: 'fuse', twoSided: true, alpha: s => clamp(((S(s).fan || 0) - 0.35) * 0.8, 0, 0.4), show: s => (S(s).fan || 0) > 0.35 }));
+    for (let k = 0; k < 6; k++) { const vx = 2.62 + k * 0.22, m = AMB(); m.obox([vx, -0.62, 0], [0.09, 0, 0], [0, 0.012, 0], [0, 0, 0.42], [0.22, 0.22, 0.24]);
+      parts.push(part(m, [vx, -0.62, 0], [0, 0, 1], s => -(S(s).vane || 0) - 0.15 * (1 - (S(s).ldoor || 0)), { piece: 'fuse', show: s => (S(s).ldoor || 0) > 0.02 })); }
+  }
+  // ---- 3-bearing swivel module: the model's nozzle cut at two bearing planes, each joint turning half the swivel;
+  //      the sixteen nozzle petals open with power and wide in afterburner
+  const J1 = { pivot: M.J1, axis: [0, 0, 1], angle: s => (S(s).bsm || 0) / 2 }, J2 = { pivot: M.J2, axis: [0, 0, 1], angle: s => (S(s).bsm || 0) / 2 };
+  b7split(D, 'vtol', { 'b:noz3': { x1: M.J2[0], test: () => true }, 'b:noz2': { x0: M.J2[0], x1: M.J1[0], test: () => true } });
+  add('vtol#rest', 'fuse', O, Y, Z, { twoSided: true });
+  add('b:noz2', 'fuse', O, Y, Z, { twoSided: true, outer: J1 });
+  add('b:noz3', 'fuse', O, Y, Z, { twoSided: true, outer: [J1, J2] });
+  const petal = s => s.engine ? 0.02 + 0.1 * clamp(((s.rpm || 0) - 0.6) / 0.4, 0, 1) + 0.16 * (s.st.ab || 0) : 0.14;
+  for (let k = 1; k <= 16; k++) { const g = 'feather.' + String(k).padStart(3, '0'), h = M[g]; add(g, 'fuse', h.pivot, h.axis, petal, { twoSided: true, outer: [J1, J2] }); }
+  { const ring = x => { const m = AMB(); rev(m, [x + 0.05, M.J1[1], 0], [-1, 0, 0], [[0, 0.62], [0.02, 0.665], [0.08, 0.665], [0.1, 0.62]], 28, [0.36, 0.34, 0.33]); return m; };
+    parts.push(part(ring(M.J1[0]), M.J1, [0, 0, 1], s => (S(s).bsm || 0) / 4, { piece: 'fuse', show: s => (S(s).bsm || 0) > 0.03 }));
+    parts.push(part(ring(M.J2[0]), M.J2, [0, 0, 1], s => (S(s).bsm || 0) / 4, { piece: 'fuse', outer: J1, show: s => (S(s).bsm || 0) > 0.03 })); }
+  // ---- F135-PW-600 exhaust on the swivelling nozzle: afterburner (conventional mode only) and the hot dry jet
+  const NX = M.J2[0] - 1.37, NR = 0.58, core = AMB(), glow = AMB(), dia = AMB(), dry = AMB();
+  rev(core, O, [-1, 0, 0], [[0, 0.7], [0.07, 0.66], [0.4, 0.42], [1, 0]], 18, [1, 0.45, 0.18, 3], [1, 1], 2);
+  for (let k = 0; k < 7; k++) dia.ico([-(0.07 + k * 0.125), 0, 0], 0.5 * (1 - k * 0.1), [1, 0.78, 0.45, 3], 0.085 * (1 + k * 0.1), 1, 1);
+  rev(glow, O, [-1, 0, 0], [[0, 0.9], [0.25, 1.0], [0.65, 0.66], [1, 0]], 18, [1, 0.5, 0.2, 3], [1, 1], 2);
+  rev(dry, O, [-1, 0, 0], [[0, 0.7], [0.5, 0.5], [1, 0]], 14, [0.35, 0.3, 0.28, 3], [1, 1], 2);
+  { const off = () => [NX + 0.15, M.J1[1], 0], thin = s => 1 - airRho(s.st.pos[1]) / 1.225, ab = s => s.engine ? (s.st.ab || 0) : 0, fl = (s, f) => 0.94 + 0.06 * Math.sin(s.t * f);
+    const sc = (s, L) => { const k = thin(s); return [L * (1 + k * 0.7), NR * (1 + k * 0.4), NR * (1 + k * 0.4)]; }, ch = [J1, J2];
+    parts.push(part(core, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, outer: ch, offset: off, alpha: s => Math.min(1, ab(s) * 0.5) * fl(s, 41), scale: s => sc(s, 3.6 + 3 * ab(s)) }));
+    parts.push(part(dia, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, outer: ch, offset: off, alpha: s => Math.min(0.5, ab(s) * 0.6) * fl(s, 53) * (1 - 0.5 * thin(s)), scale: s => sc(s, 3.6 + 3 * ab(s)) }));
+    parts.push(part(glow, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, outer: ch, offset: off, alpha: s => ab(s) * 0.14 * (1 - 0.5 * thin(s)), scale: s => sc(s, 5.5 + 4 * ab(s)) }));
+    parts.push(part(dry, O, [1, 0, 0], Z, { piece: 'fuse', add: true, unlit: 1, twoSided: true, outer: ch, offset: off,
+      alpha: s => s.engine ? Math.max(0, s.rpm - 0.3) * (0.16 + 0.25 * clamp(env.lightK * 1.5, 0, 1) + 0.12 * clamp((S(s).bsm || 0) - 0.5, 0, 1)) * (1 - ab(s)) * fl(s, 29) : 0, scale: s => sc(s, 2.4 + 0.8 * clamp((S(s).bsm || 0), 0, 1)) })); }
+  const piece = (groups, mass) => {
+    let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (const g of groups) { const b = b7bounds(g, D); for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], b.mn[k]); mx[k] = Math.max(mx[k], b.mx[k]); } }
+    const c = V3.mul(V3.add(mn, mx), 0.5), half = V3.mul(V3.sub(mx, mn), 0.5), corners = [];
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) corners.push([sx * half[0], sy * half[1], sz * half[2]]);
+    const deb = b7meshes(groups[0], texs, matFor, D)[0];
+    return { mesh: null, debrisMesh: deb ? deb.build() : null, c, half: half.map(v => Math.max(v, 0.3)), corners, mass };
+  };
+  const pieces = { fuse: piece(['fuselage#rest'], 0.68), wingR: piece(['b:wingR'], 0.1), wingL: piece(['b:wingL'], 0.1), tail: piece(['rightElevator', 'leftElevator'], 0.06), gear: piece(['rightWheel', 'leftWheel', 'noseWheel'], 0.06) };
+  const lights = navLights([-2.02, -0.12, 5.36], [-5.5, 0.05, 0], [-1.0, 1.0, 0]);
+  lights.extra = [{ k: 'land', p: [4.7, -1.3, 0], c: [1, 0.96, 0.88], size: 2400, gear: true }, { k: 'strobe', p: [-2.02, -0.1, 5.4], c: [1, 1, 1], wing: 1 }, { k: 'strobe', p: [-2.02, -0.1, -5.4], c: [1, 1, 1], wing: -1 }];
+  return { parts, pieces, lights, eye: [5.2, 0.98, 0], len: 15.6, span: 10.7, hmd: true, lookDown: 0.06 };
+}
+// ===================== STOVL flight control: conversion, unified control law, thrust allocation =====================
+// Conversion (STOVL button, below 250 kt): nine doors open in sequence (~6 s), then the clutch spins the LiftFan up to
+// engine speed (~4.5 s) and locks. With the fan turning the unified control law flies the jet:
+//   throttle  -> ground speed along the nose (the low mark is the hover; below it you back up slowly)
+//   stick fore/aft -> climb / sink rate in the hover, blending to flight-path rate as the wing takes over
+//   stick sideways -> bank angle (lets go to wings level); rudder -> yaw rate
+// The computer splits the thrust: LiftFan (front) against 3BSM (rear) holds pitch attitude, the roll posts hold bank,
+// the 3BSM's angle and the fan's vane box give the push fore and aft, and the 3BSM vectors sideways for yaw.
+// If the jet is too heavy, or the engine can't keep up, the computer keeps the attitude and gives up height.
+const STOVL_VMAX = 128.6;   // 250 kt: top of the STOVL envelope
+function stovlToggle() {
+  const st = SIM.st, c = SIM.ctl, a = st.acd;
+  if (st.crashed) return;
+  if (!c.set) {
+    if ((st.ias || 0) > STOVL_VMAX) return ui.toast('TOO FAST TO CONVERT', 'Slow below 250 kt, then select STOVL');
+    c.set = 1; SIM.ev.push({ t: 'servo', k: 'doors' });
+    ui.toast('STOVL CONVERSION', 'Doors opening, then the LiftFan clutch engages — about 10 s');
+  } else {
+    if (!st.onGround && (st.ias || 0) < 31 && (st.fan || 0) > 0.2) return ui.toast('NOT WING-BORNE', 'Accelerate past 60 kt before going back to CTOL — the fan is holding you up');
+    c.set = 0; SIM.ev.push({ t: 'servo', k: 'doors' });
+    ui.toast('CTOL CONVERSION', 'Fan unloading and declutching, doors closing');
+  }
+  if (typeof updSet === 'function') updSet();
+}
+function stovlPre(st, a, c, dt, agl) {
+  const K = a.stovl, want = c.set === 1;
+  st.conv = st.conv || 0; st.fan = st.fan || 0; st.bsm = st.bsm || 0; st.vane = st.vane || 0;
+  const prevFan = st.fan, prevConv = st.conv;
+  if (want) {
+    st.conv = Math.min(1, st.conv + dt / K.doorT);
+    if (st.conv >= 1) st.fan = Math.min(1, st.fan + dt / K.fanT * (st.engine ? 1 : 0.1));
+  } else {
+    if (st.fan > 0) st.fan = Math.max(0, st.fan - dt / 2.6);
+    else st.conv = Math.max(0, st.conv - dt / K.doorT);
+  }
+  if (prevConv < 1 && st.conv >= 1 && want) { SIM.ev.push({ t: 'clunk', k: 'doors' }); SIM.ev.push({ t: 'clutch' }); }
+  if (prevFan < 1 && st.fan >= 1) { SIM.ev.push({ t: 'clunk', k: 'lock' }); ui.toast('LIFTFAN LOCKED', 'STOVL mode — throttle sets ground speed, stick sets climb or sink'); }
+  if (prevConv > 0 && st.conv <= 0) SIM.ev.push({ t: 'clunk', k: 'doors' });
+  // door sequence: lift-fan door, auxiliary inlets, lower fan doors, 3BSM doors, roll posts
+  const seg = (a0, a1) => clamp((st.conv - a0) / (a1 - a0), 0, 1), ez = x => x * x * (3 - 2 * x);
+  const fanMax = (st.ias || 0) < 87 ? 65 * D2R : 35 * D2R;        // the big door stays at 65° below ~170 kt, 35° above
+  const fdT = ez(seg(0, 0.5)) * fanMax;
+  st.fdoor = (st.fdoor || 0) + clamp(fdT - (st.fdoor || 0), -0.45 * dt, 0.45 * dt);
+  st.adoor = ez(seg(0.15, 0.55)); st.ldoor = ez(seg(0.3, 0.7)); st.bdoor = ez(seg(0.45, 0.85)); st.rdoor = ez(seg(0.6, 1));
+  st.lfA = ((st.lfA || 0) + dt * st.fan * st.fan * 46) % (Math.PI * 200);
+  st.uclOn = st.fan > 0.02 && !st.crashed;
+  if (!st.uclOn) { st.bsm = Math.max(0, st.bsm - 0.663 * dt); st.vane += (0 - st.vane) * Math.min(1, dt * 3); st.ffA = 0; st.frA = st.bsm > 0.01 ? st.frA : 0; st.rpA = [0, 0]; st.ucl = null; st.uclIz = 0; return null; }
+  // ---- unified control law
+  const m = (a.mass + st.fuel) * st.payload, h = Q.rot(st.q, [1, 0, 0]), hz = V3.norm([h[0], 0, h[2]]), rz = [-hz[2], 0, hz[0]];
+  let vref = [0, 0, 0];
+  if (typeof CVN !== 'undefined' && CVN.ship) { const l = cvnLocal(st.pos); if (Math.abs(l[0]) < 450 && Math.abs(l[2]) < 220 && st.pos[1] - CVN.Y < 150) { const sv = cvnVelAt(l); vref = [sv[0], 0, sv[2]]; } }   // over the ship: speeds are relative to her deck
+  const vg = V3.sub(st.vel, vref), vx = V3.dot(vg, hz), vlat = V3.dot(vg, rz), vz = vg[1];
+  const onG = st.contacts.some(Boolean), jb = 1 - smooth(26, 75, st.ias || 0);
+  const DET = K.det, t = c.thr;
+  // throttle: idle..5% holds the spot too (so a vertical take-off from idle doesn't back away), 5-17% backs up to 7 kt,
+  // 17-23% is the hover mark, above it forward speed up to 250 kt
+  const vxc = t < 0.05 ? 0 : t < DET - 0.03 ? -3.6 * clamp((DET - 0.03 - t) / (DET - 0.08), 0, 1) : t <= DET + 0.03 ? 0 : STOVL_VMAX * Math.pow((t - DET - 0.03) / (1 - DET - 0.03), 1.6);
+  let stickVz = c.pitch > 0 ? c.pitch * 6 : c.pitch * 4.5;
+  if (agl < 14 && stickVz < 0) stickVz = Math.max(stickVz, -1.4 - agl * 0.18);   // sink rate limited near the deck
+  const gam = Math.atan2(vz, Math.max(4, Math.hypot(vx, vlat)));
+  st.gcmd = st.gcmd == null ? gam : st.gcmd + (gam - st.gcmd) * Math.min(1, dt * 3 * jb) + c.pitch * 0.14 * (1 - jb) * dt;
+  st.gcmd = clamp(st.gcmd, -0.35, 0.45);
+  const vzc = jb * stickVz + (1 - jb) * Math.hypot(vx, vlat) * Math.tan(st.gcmd);
+  const noLift = onG && stickVz < 0.8 && vzc < 0.8;
+  st.uclIz = noLift ? 0 : clamp((st.uclIz || 0) + (vzc - vz) * 0.7 * dt, -3, 3);
+  const azc = clamp(1.5 * (vzc - vz) + st.uclIz, -4, 5);
+  const amax = onG ? 9 : lerp(5.5, 2.6, jb);
+  let axc = clamp(0.55 * (vxc - vx), -amax, amax);
+  if (onG && vxc > 0.5) axc = amax;                                             // short take-off: full push down the deck
+  const fwdOff = onG && vxc <= 0.5;
+  const aeroW = Q.rot(st.q, st.aeroB || [0, 0, 0]);
+  const Fw = [m * axc * hz[0] - aeroW[0], noLift ? 0 : m * (azc + GRAV) - aeroW[1], m * axc * hz[2] - aeroW[2]];
+  const xb = h, yb = Q.rot(st.q, [0, 1, 0]);
+  let Fbx = fwdOff ? 0 : V3.dot(Fw, xb), Fby = noLift ? 0 : Math.max(0, V3.dot(Fw, yb));
+  if (fwdOff && !noLift) Fbx = clamp(V3.dot(Fw, xb), -m * 2.5, m * 2.5);
+  // ---- attitude: hover at ~3° nose-up (3.8° on the way down to the deck, mains first), flight path + AoA in the transition
+  const th = st.pitchAng, ph = st.rollAng;
+  const thH = (3 + (vz < -0.3 && agl < 15 ? 0.8 : 0)) * D2R;
+  const thc = jb * thH + (1 - jb) * (st.gcmd + 8 * D2R);
+  st.phiH = st.phiH == null ? ph : st.phiH + (ph - st.phiH) * Math.min(1, dt * 4 * jb) + c.roll * 1.1 * (1 - jb) * dt;
+  st.phiH = clamp(st.phiH, -1.05, 1.05);
+  const drift = SIM.opt.assist !== false && Math.abs(c.rollT || 0) < 0.05 ? clamp(-vlat * 0.035, -0.12, 0.12) : 0;   // hands off: leans against sideways drift
+  const phc = jb * (c.roll * 0.32 + drift) + (1 - jb) * st.phiH;
+  const q = st.w[2], p = st.w[0], r = -st.w[1];
+  const att = noLift ? 0 : 1;
+  const qc = clamp(2.2 * (thc - th), -0.35, 0.35), pc = clamp(2.6 * (phc - ph), -0.7, 0.7), rc = clamp((c.yaw || 0) * 0.35, -0.35, 0.35);
+  const aeroK = smooth(28, 55, st.tas || 0);
+  st.ucl = { Fbx, Fby, Mx: att * a.I[0] * 6 * (pc - p) * (1 - 0.6 * aeroK), My: -a.I[1] * 4 * (rc - r) * (onG ? 0.2 : 1) * (1 - 0.6 * aeroK), Mz: att * a.I[2] * 5 * (qc - q) * (1 - 0.6 * aeroK), jb, onG, vx, vz, vlat, vxc, vzc, m };
+  // the aerodynamic fly-by-wire gets the same rate commands (it fades in with airspeed)
+  const save = { pitch: c.pitch, roll: c.roll, yaw: c.yaw };
+  if (!noLift) { c.pitch = clamp(qc / 0.45, -1, 1); c.roll = clamp(pc / 2.2, -1, 1); }
+  return save;
+}
+function stovlForces(st, a, c, dt, agl) {
+  const K = a.stovl, U = st.ucl;
+  const P = st.engine ? clamp((st.rpm - 0.25) / 0.75, 0, 1) : 0, sig = Math.pow(airRho(st.pos[1]) / 1.225, 0.7);
+  const hgi = 1 - 0.02 * Math.exp(-Math.max(0, agl) / 5);    // hot exhaust re-ingested near the ground
+  const fk = st.fan * st.fan;
+  const Ffm = K.fanMax * P * fk * sig * hgi, Frm = K.bsmMax * P * sig * hgi, Rpm = K.rpMax * P * sig;
+  // roll posts: a little baseline lift plus differential for roll
+  const base = Math.min(2 * K.rpMax * sig, U.Fby * 0.09), dR = U.Mx / (2 * K.rpZ);
+  let rpL = clamp(base / 2 + dR, 0, K.rpMax * sig), rpR = clamp(base / 2 - dR, 0, K.rpMax * sig);
+  // front/rear split for pitch, using where the 3BSM exit is right now
+  const ex = bsmExit(st.bsm), xr = ex[0], xf = K.fanX;
+  const Fy2 = Math.max(0, U.Fby - rpL - rpR), Mz2 = U.Mz - K.rpX * (rpL + rpR);
+  let Ffy = (Mz2 - Fy2 * xr) / (xf - xr), Fry = Fy2 - Ffy;
+  if (Ffy < 0) { Ffy = 0; Fry = Fy2; } if (Fry < 0) { Fry = 0; Ffy = Fy2; }
+  // fore and aft: mostly the 3BSM angle, the vane box takes a share
+  let Ffx = clamp(U.Fbx * 0.25, -Ffy * 0.18, Ffy * 0.8), Frx = U.Fbx - Ffx;
+  let Fr = Math.hypot(Frx, Fry), thC = Fr > 500 ? Math.atan2(Fry, Frx) : st.bsm;
+  if (thC > 95 * D2R) { const keep = Fr; thC = 95 * D2R; Fr = Fry / Math.sin(thC); Ffx += Frx - Fr * Math.cos(thC); Fr = Math.max(Fr, 0) || keep; }
+  if (thC < 0) { thC = 0; Fr = Math.max(0, Frx); }
+  let Ff = Math.hypot(Ffx, Ffy); const vaneC = Ff > 300 ? clamp(Math.atan2(Ffx, Ffy), -0.18, 0.7) : 0;
+  // engine demand for the next step (what it would take), then what it can actually give now
+  const need = Math.max(Ff / (K.fanMax * Math.max(fk, 0.05) * sig * hgi), Fr / (K.bsmMax * sig * hgi), (rpL + rpR) / (2 * K.rpMax * sig) * 0.8);
+  st.uclThr = clamp(need * 1.04 + 0.02, 0, 1); st.hvrNeed = need;
+  const sat = Math.min(Ff > Ffm ? Ffm / Ff : 1, Fr > Frm ? Frm / Fr : 1);
+  Ff *= sat; Fr *= sat; rpL = Math.min(rpL, Rpm); rpR = Math.min(rpR, Rpm);
+  st.hvrSat = sat;
+  // yaw: the 3BSM vectors sideways
+  const psiC = Fr > 2000 ? Math.asin(clamp(-U.My / (xr * Fr), -0.2, 0.2)) : 0;
+  // actuators: 3BSM swivels 95° in 2.5 s; vane box, fan blade pitch and roll-post valves are quick
+  st.bsm += clamp(thC - st.bsm, -0.663 * dt, 0.663 * dt);
+  st.vane += clamp(vaneC - st.vane, -1.2 * dt, 1.2 * dt);
+  st.psi = (st.psi || 0) + clamp(psiC - (st.psi || 0), -1 * dt, 1 * dt);
+  st.ffA = (st.ffA || 0) + (Ff - (st.ffA || 0)) * Math.min(1, dt / 0.12);
+  st.frA = (st.frA || 0) + (Fr - (st.frA || 0)) * Math.min(1, dt / 0.1);
+  st.rpA = st.rpA || [0, 0]; st.rpA[0] += (rpL - st.rpA[0]) * Math.min(1, dt / 0.06); st.rpA[1] += (rpR - st.rpA[1]) * Math.min(1, dt / 0.06);
+  // forces and moments from where each jet actually is
+  let F = [0, 0, 0], M = [0, 0, 0];
+  const push = (f, r) => { F = V3.add(F, f); M = V3.add(M, V3.cross(r, f)); };
+  push([st.ffA * Math.sin(st.vane), st.ffA * Math.cos(st.vane), 0], [K.fanX, K.fanY, 0]);
+  const ex2 = bsmExit(st.bsm), cp = Math.cos(st.psi);
+  push([st.frA * Math.cos(st.bsm) * cp, st.frA * Math.sin(st.bsm) * cp, st.frA * Math.sin(st.psi)], [ex2[0], ex2[1], 0]);
+  push([0, st.rpA[0], 0], [K.rpX, -0.05, -K.rpZ]); push([0, st.rpA[1], 0], [K.rpX, -0.05, K.rpZ]);
+  // suckdown: the jets drag air down past the airframe near the ground
+  const vert = st.ffA * Math.cos(st.vane) + st.frA * Math.sin(st.bsm) + st.rpA[0] + st.rpA[1];
+  const sd = 0.03 * vert * Math.exp(-Math.max(0, agl) / 3.5);
+  F = V3.add(F, Q.inv(st.q, [0, -sd, 0]));
+  { const e9 = bsmExit(1.57), fs = -e9[0] / (K.fanX - e9[0]);   // the most it can hold up with the thrust split balanced about the CG
+    st.hvrMax = (Math.min(K.fanMax / fs, K.bsmMax / (1 - fs)) + 2 * K.rpMax) * sig * hgi * (1 - 0.03 * Math.exp(-Math.max(0, agl) / 3.5)) * (st.engine ? 1 : 0); }
+  st.lfT = st.ffA; st.vertT = vert;
+  return { F, M, T: st.ffA + st.frA + st.rpA[0] + st.rpA[1] };
+}
+// start ready to go: converted, fan locked. In the air: a 15 m hover over the runway with 30% fuel (light enough to hover).
+// On the carrier: parked on the bow cat line, clear of the catapult, ready for a short take-off down the deck.
+function stovlSpawnReady(air) {
+  const st = SIM.st, c = SIM.ctl, a = st.acd, K = a.stovl;
+  c.set = 1; st.conv = 1; st.fan = 1; st.fdoor = 65 * D2R; st.adoor = st.ldoor = st.bdoor = st.rdoor = 1; st.engine = true; st.rpm = Math.max(st.rpm || 0, 0.55); st.flapPos = 20;
+  if (CFG.start === 'carrier' && typeof CVN !== 'undefined' && CVN.ship) {
+    const l = [2, CVN.Y - a.gear[0].p[1] - 0.03, CVN.CATS[0].z]; st.pos = cvnWorld(l); st.vel = cvnVelAt(l); st.q = Q.fromHPR(CVN.ship.dir - Math.PI / 2, 0, 0); st.w = [0, 0, 0];
+    c.thr = 0; st.bsm = 0.5;
+  }
+  if (air) {
+    st.fuel = Math.min(st.fuel, a.fuelMax * 0.3);
+    const W = (a.mass + st.fuel) * st.payload * GRAV;
+    st.pos[1] += 15; st.onGround = false; st.airborne = true; st.vel = [0, 0, 0]; st.w = [0, 0, 0]; st.contacts = st.contacts.map(() => false);
+    st.bsm = 1.52; c.thr = K.det; c.gearDown = true; st.gear = 1; st.rpm = 0.93; st.uclThr = 0.9;
+    st.ffA = 0.45 * W; st.frA = 0.5 * W; st.rpA = [0.025 * W, 0.025 * W]; st.gcmd = 0; st.phiH = 0;
+    st.q = Q.mul(st.q, Q.axis([0, 0, 1], 3 * D2R));
+  }
+  if (typeof updThr === 'function') { updThr(); updSet(); }
+}
+// helmet symbology for STOVL: mode / conversion, fan, nozzle, ground speed, sink rate, hover margin, and the hover cue
+// (a circle under the waterline: the dot is where you're drifting — keep it in the middle to hold the spot)
+function stovlHMD(g, st, ctr, bw, bh, fs) {
+  const a = st.acd, U = st.ucl, x = ctr[0] - bw * 0.43 - fs * 1.9, y0 = ctr[1] - bh * 0.05 + fs * 1.55 * 1.25 + fs * 2.6, lh = fs * 1.2;
+  const W = (a.mass + st.fuel) * st.payload * GRAV, mgn = st.hvrMax ? st.hvrMax / W - 1 : 0;
+  g.textAlign = 'left';
+  const mode = SIM.ctl.set ? (st.fan >= 1 ? 'STOVL' : st.conv < 1 ? `CONV ${Math.round(st.conv * 100)}%` : `CLUTCH ${Math.round(st.fan * 100)}%`) : `CTOL ${Math.round(100 - (st.conv * 0.57 + st.fan * 0.43) * 100)}%`;
+  g.fillText(`${mode}  FAN ${Math.round(st.fan * 100)}`, x, y0);
+  g.fillText(`NOZ ${Math.round((st.bsm || 0) / D2R)}°${U ? `  GS ${Math.round(Math.hypot(U.vx, U.vlat) * KT)}` : ''}`, x, y0 + lh);
+  if (U) g.fillText(`VS ${U.vz >= 0 ? '+' : ''}${Math.round(U.vz * 60 * FT / 10) * 10}`, x, y0 + lh * 2);
+  if (st.hvrMax) {
+    const ok = mgn > 0.02; g.save(); if (!ok) { g.fillStyle = Math.floor(performance.now() / 300) % 2 ? 'rgba(255,190,80,0.95)' : 'rgba(255,120,60,0.95)'; }
+    g.fillText(`HVR ${mgn >= 0 ? '+' : ''}${Math.round(mgn * 100)}%${(st.hvrSat || 1) < 0.98 && U && !U.onG ? '  THRUST LIMIT' : ''}`, x, y0 + lh * 3);
+    g.restore();
+  }
+  if (U && U.jb > 0.4) {   // hover cue
+    const cx = ctr[0], cy = ctr[1] + bh * 0.2, R = bh * 0.11, k = R / 5.1;   // full circle = 10 kt of drift
+    g.beginPath(); g.arc(cx, cy, R, 0, 7); g.stroke();
+    g.beginPath(); g.moveTo(cx - R * 0.2, cy); g.lineTo(cx + R * 0.2, cy); g.moveTo(cx, cy - R * 0.2); g.lineTo(cx, cy + R * 0.2); g.stroke();
+    const dx = clamp(U.vlat * k, -R * 1.4, R * 1.4), dy = clamp(-U.vx * k, -R * 1.4, R * 1.4);
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + dx, cy + dy); g.stroke(); g.beginPath(); g.arc(cx + dx, cy + dy, fs * 0.28, 0, 7); g.fill();
+    // vertical speed caret beside it: ±5 m/s
+    const vx2 = cx + R * 1.5, vy = cy - clamp(U.vz / 5, -1, 1) * R; g.beginPath(); g.moveTo(vx2, cy - R); g.lineTo(vx2, cy + R); g.moveTo(vx2 - 4, cy); g.lineTo(vx2 + 4, cy); g.stroke();
+    g.beginPath(); g.moveTo(vx2 + 2, vy); g.lineTo(vx2 + 9, vy - 4); g.lineTo(vx2 + 9, vy + 4); g.closePath(); g.fill();
+  }
+}
+function stovlStatus(st) {
+  const a = st.acd, W = (a.mass + st.fuel) * st.payload * GRAV, mgn = st.hvrMax ? st.hvrMax / W - 1 : null, U = st.ucl;
+  const md = SIM.ctl.set ? (st.fan >= 1 ? 'STOVL' : st.conv < 1 ? 'DOORS ' + Math.round(st.conv * 100) + '%' : 'FAN ' + Math.round(st.fan * 100) + '%') : 'CTOL…';
+  return `<br><span style="color:#8affb0">${md} · NOZ ${Math.round((st.bsm || 0) / D2R)}°${U ? ` · GS ${Math.round(Math.hypot(U.vx, U.vlat) * KT)} kt · VS ${Math.round(U.vz * 60 * FT / 10) * 10}` : ''}</span>${mgn != null ? ` · <span style="color:${mgn > 0.02 ? '#8affb0' : '#ffb070'}">HVR ${mgn >= 0 ? '+' : ''}${Math.round(mgn * 100)}%</span>` : ''}`;
 }
 
 // ===================== 6-DOF flight physics =====================
@@ -6722,7 +7180,7 @@ function stepSim(dt) {
   if (a.prop) { if (st.engine && st.rpm < 0.25) st.starting += dt; else st.starting = 0; }
   else if (st.engine) {
     if (st.rpm < 0.25) st.starting += dt; else st.starting = 0;
-    const tgt = st.starting > 0 && st.starting < a.startTime ? Math.min(0.3, st.starting / a.startTime * 0.3) : (a.kind === 'heli' ? 1 : 0.25 + 0.75 * c.thr * pf);
+    const tgt = st.starting > 0 && st.starting < a.startTime ? Math.min(0.3, st.starting / a.startTime * 0.3) : (a.kind === 'heli' ? 1 : 0.25 + 0.75 * (st.uclOn ? st.uclThr || 0 : c.thr) * pf);
     const rate = a.kind === 'heli' ? 0.25 : a.spool;
     const up = a.kind === "heli" ? 1 : 0.45 + 0.85 * st.rpm * st.rpm, dn = a.kind === 'heli' ? 1 : 0.55 + 0.6 * st.rpm;   // spools slowly off idle, fast near the top
     st.rpm += clamp(tgt - st.rpm, -rate * dn * dt, rate * up * dt * (st.rpm < 0.3 ? 0.6 : 1));
@@ -6751,6 +7209,7 @@ function stepSim(dt) {
   st.elev = null;
   if (a.airbrake) { const want = c.brake && !st.onGround ? 1 : 0; if (want && !st.abrk) SIM.ev.push({ t: 'servo', k: 'noz' }); st.abrk = clamp((st.abrk || 0) + (want ? dt : -dt) * 2, 0, 1); }
   if (a.kind === 'fixed') {
+    const uclSave = a.stovl ? stovlPre(st, a, c, dt, agl) : null;   // F-35B: doors, LiftFan clutch and the unified control law
     const f = a.vtol ? 0 : c.set;
     if (!a.vtol && !st.failed.flaps) { const tgt = a.sets[c.set], fr = a.flapRate || 8; const mv = clamp(tgt - st.flapPos, -fr * dt, fr * dt); if (mv && !st.flapMoving) SIM.ev.push({ t: 'servo', k: 'flap' }); if (!mv && st.flapMoving) SIM.ev.push({ t: 'clunk', k: 'flap' }); st.flapMoving = !!mv; st.flapPos += mv; }
     const fi = a.vtol ? 0 : setIdx(a, st.flapPos), f0 = Math.floor(fi), ff = fi - f0;
@@ -6769,7 +7228,7 @@ function stepSim(dt) {
       st.tebT = Math.max(0, (st.tebT || 0) - dt);
     }
     if (a.abT) { // afterburner: top of the throttle
-      const want = st.engine && st.rpm > 0.85 && c.thr > a.abT ? clamp((c.thr - a.abT) / (1 - a.abT), 0.2, 1) : 0;
+      const want = st.engine && st.rpm > 0.85 && c.thr > a.abT && !(st.conv > 0.01) ? clamp((c.thr - a.abT) / (1 - a.abT), 0.2, 1) : 0;
       if (want > 0 && !(st.ab > 0.01)) SIM.ev.push({ t: 'boom', v: 0.06 });
       st.ab = clamp((st.ab || 0) + clamp(want - (st.ab || 0), -dt * 3, dt * 2), 0, 1);
       if (want === 0 && st.ab < 0.02) st.ab = 0;
@@ -6790,10 +7249,12 @@ function stepSim(dt) {
     }
     if (st.unstartT > 0) { st.unstartT -= dt; T *= 0.15; }
     if (a.airliner) T = airlinerSys(st, a, c, T, V, dt);
-    Fb = V3.add(Fb, [T * Math.cos(st.noz), T * Math.sin(st.noz), 0]);
-    if (a.vtol && st.engine && st.noz > 0.75 && c.thr > 0.35) { // jet blast kicks up dust / spray in a ring under a low hover
+    if (st.uclOn) { const sf = stovlForces(st, a, c, dt, agl); Fb = V3.add(Fb, sf.F); Mb = V3.add(Mb, sf.M); st.propB = sf.F; T = sf.T; }
+    else { Fb = V3.add(Fb, [T * Math.cos(st.noz), T * Math.sin(st.noz), 0]); st.propB = [T * Math.cos(st.noz), T * Math.sin(st.noz), 0]; }
+    if (a.stovl && st.conv > 0) Fb = V3.add(Fb, Q.inv(st.q, V3.mul(V3.sub(st.vel, SIM.wind), -0.5 * rho * V * 1.1 * st.conv)));   // open doors: drag
+    if (st.engine && ((a.vtol && st.noz > 0.75 && c.thr > 0.35) || (st.uclOn && (st.vertT || 0) > 60000))) { // jet blast kicks up dust / spray in a ring under a low hover
       const sg = surfaceAt(st.pos[0], st.pos[2]), agl = st.pos[1] - sg.h;
-      const n = agl < 16 ? dt * 16 * (1 - agl / 16) * c.thr * (SIM.fxK || 1) : 0;
+      const n = agl < 16 ? dt * 16 * (1 - agl / 16) * (st.uclOn ? 1 : c.thr) * (SIM.fxK || 1) : 0;
       for (let k = 0; k < 3; k++) if (Math.random() < n) {
         const an = Math.random() * Math.PI * 2, rr = 1.5 + Math.random() * 3, sp = 9 + Math.random() * 8;
         spawnFx(sg.water ? 'spray' : 'dust', [st.pos[0] + Math.cos(an) * rr, sg.h + 0.3, st.pos[2] + Math.sin(an) * rr], [Math.cos(an) * sp, 0.6 + Math.random() * 1.6, Math.sin(an) * sp]);
@@ -6933,7 +7394,9 @@ function stepSim(dt) {
       }
       Mb = V3.add(Mb, [a.rcs[0] * pr * nf - st.w[0] * a.I[0] * 1.5 * nf, -a.rcs[1] * py * nf - st.w[1] * a.I[1] * 1.0 * nf, a.rcs[2] * pp * nf - st.w[2] * a.I[2] * 2 * nf]);
     }
-    st.alpha = alpha; st.beta = beta; st.stall = stall && agl > 3 && !(a.vtol && st.noz > 0.5 && st.thrust > 40000);
+    st.alpha = alpha; st.beta = beta; st.stall = stall && agl > 3 && !(a.vtol && st.noz > 0.5 && st.thrust > 40000) && !(st.uclOn && (st.vertT || 0) > 40000);
+    st.aeroB = V3.sub(Fb, st.propB || [0, 0, 0]);   // what the air did this step (the STOVL computer feeds it forward)
+    if (uclSave) Object.assign(c, uclSave);
     st.stallWarn = !!a.limits && st.airborne && V > 15 && alpha > a.AS - FLAP(a.flapAS) - (a.warnMargin || 4.5) * D2R;   // reed stall horn: sounds ~5-10 kt before the stall
   } else {
     // ---- helicopter ----
@@ -7563,6 +8026,13 @@ function audioInit() {
   // --- cockpit: stall horn, servo motor ---
   N.horn = osc('sawtooth', 2350); N.hornF = filt('bandpass', 2350, 6); N.hornG = gain(0); N.horn.connect(N.hornF); N.hornF.connect(N.hornG); N.hornG.connect(N.master);
   N.servo = osc('sawtooth', 120); N.servoF = filt('bandpass', 700, 2); N.servoG = gain(0); N.servo.connect(N.servoF); N.servoF.connect(N.servoG); N.servoG.connect(bus);
+  // --- F-35B LiftFan: a deep thrashing roar from the fan's air column, the buzz of 2 x ~26 blades counter-rotating
+  //     (blade-pass interaction tones beat against each other), a high whine, and the clutch / gearbox
+  N.lfR = src(brown); N.lfRF = filt('bandpass', 240, 0.7); N.lfRG = gain(0); N.lfR.connect(N.lfRF); N.lfRF.connect(N.lfRG); N.lfRG.connect(bus);
+  N.lfB1 = osc('sawtooth', 120); N.lfB2 = osc('sawtooth', 127); N.lfBF = filt('lowpass', 900, 1.5); N.lfBG = gain(0);
+  N.lfB1.connect(N.lfBF); N.lfB2.connect(N.lfBF); N.lfBF.connect(N.lfBG); N.lfBG.connect(bus);
+  N.lfAM = osc('sine', 6); N.lfAMg = gain(0); N.lfAM.connect(N.lfAMg); N.lfAMg.connect(N.lfRG.gain);
+  N.lfW = osc('sine', 2900); N.lfW2 = osc('sine', 3120); N.lfWG = gain(0); N.lfW.connect(N.lfWG); N.lfW2.connect(N.lfWG); N.lfWG.connect(bus);
   N.starter = osc('sawtooth', 90); N.starterF = filt('bandpass', 400, 3); N.starterG = gain(0); N.starter.connect(N.starterF); N.starterF.connect(N.starterG); N.starterG.connect(bus);
 }
 
@@ -7616,6 +8086,11 @@ function shot(kind, v = 1) {
   } else if (kind === 'squelch') {   // radio key-up: a burst of band-limited static and a click
     const s = noise(0.22), b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = 2200; b.Q.value = 0.6; s.connect(b); env(b, 0.004, 0.22 * v, 0.17);
     const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = 900; o.start(t); o.stop(t + 0.03); env(o, 0.001, 0.06 * v, 0.02);
+  } else if (kind === 'clutch') {   // LiftFan clutch: carbon plates bite, a grinding whoosh as the fan spins up
+    const s = noise(4.5), b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.Q.value = 1.4; b.frequency.setValueAtTime(140, t); b.frequency.exponentialRampToValueAtTime(900, t + 4.3);
+    s.connect(b); env(b, 0.4, 0.4 * v, 4);
+    const o = ctx.createOscillator(); o.type = 'sawtooth'; o.frequency.setValueAtTime(30, t); o.frequency.exponentialRampToValueAtTime(120, t + 4.4); o.start(t); o.stop(t + 4.6);
+    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 500; o.connect(lp); env(lp, 0.3, 0.18 * v, 4.1);
   } else if (kind === 'click') {
     const o = ctx.createOscillator(); o.type = 'square'; o.frequency.value = 1600; o.start(t); o.stop(t + 0.03); env(o, 0.001, 0.12, 0.02);
   }
@@ -7628,7 +8103,7 @@ function audioUpdate(dt, camDist, cockpit, active) {
   // events from the simulation
   for (const e of SIM.ev) {
     if (!active) continue;
-    if (e.t === 'servo') { servoT = e.k === 'noz' ? 1.2 : e.k === 'gear' ? 4 : 2.5; N.servoK = e.k; }
+    if (e.t === 'servo') { servoT = e.k === 'noz' ? 1.2 : e.k === 'gear' ? 4 : e.k === 'doors' ? 6.2 : 2.5; N.servoK = e.k; }
     else if (e.t === 'clunk') { shot('clunk', e.k === 'gear' ? 1.3 : 0.8); if (e.k === N.servoK) servoT = 0; }
     else if (e.t === 'sonic') { if (!cockpit) shot('boom', 0.55); else shot('thump', 0.6); }
     else shot(e.t, e.v);
@@ -7654,7 +8129,7 @@ function audioUpdate(dt, camDist, cockpit, active) {
   // jet
   const heard = a.kind === 'rocket' && !crashed && st.rk ? rocketHeard(st.rk, cam.eye) : null, rkt = !!heard && heard.k > 0.01;
   const fan = (a.key === 'b737' || a.key === 'b2') && !crashed;   // high-bypass turbofans: a softer roar, a strong fan whine and buzz
-  const jet = ((a.key === 'jet' || a.key === 'f22' || a.key === 'f35' || a.key === 'hyper' || a.key === 'sr71' || fan) && !crashed) || rkt;
+  const jet = ((a.key === 'jet' || a.key === 'f22' || a.key === 'f35' || a.key === 'f35b' || a.key === 'hyper' || a.key === 'sr71' || fan) && !crashed) || rkt;
   // heard from outside, a jet is loudest behind (the exhaust roar) and whines ahead (the fan); and its pitch rises
   // coming toward you and drops going away (Doppler: speed of sound against how fast it closes on you)
   const toCam = V3.sub(cam.eye, st.pos), dC = V3.len(toCam) || 1, fwd = Q.rot(st.q, [1, 0, 0]), ahead = V3.dot(fwd, V3.mul(toCam, 1 / dC));
@@ -7712,7 +8187,14 @@ function audioUpdate(dt, camDist, cockpit, active) {
   servoT = Math.max(0, servoT - dt);
   const sv = servoT > 0 && !crashed ? 1 : 0;
   setP(N.servoG.gain, sv * (N.servoK === 'noz' ? 0.16 : 0.11) * (cockpit ? 1 : att * 1.5), 0.04);
-  setP(N.servo.frequency, N.servoK === 'noz' ? 260 + st.noz * 120 : N.servoK === 'gear' ? 140 : 105, 0.05);
+  setP(N.servo.frequency, N.servoK === 'noz' ? 260 + st.noz * 120 : N.servoK === 'gear' ? 140 : N.servoK === 'doors' ? 180 + 60 * Math.sin(servoT * 2.1) : 105, 0.05);
+  // F-35B LiftFan
+  { const lf = a.stovl && !crashed ? (st.fan || 0) : 0, load = a.stovl ? clamp((st.lfT || 0) / a.stovl.fanMax, 0, 1) : 0, below = cockpit ? 0.55 : clamp(0.7 + 0.5 * clamp(-ahead, -0.3, 1), 0.5, 1.2);
+    setP(N.lfRG.gain, lf * lf * (0.18 + 0.5 * load) * att * below, 0.15); setP(N.lfRF.frequency, (150 + 160 * lf + 120 * load) * Math.sqrt(dop), 0.2);
+    setP(N.lfAM.frequency, 4 + 5 * lf, 0.3); setP(N.lfAMg.gain, lf * lf * (0.05 + 0.12 * load) * att, 0.2);
+    setP(N.lfB1.frequency, (40 + 95 * lf) * dop, 0.2); setP(N.lfB2.frequency, (42 + 101 * lf) * dop, 0.2); setP(N.lfBF.frequency, 400 + 900 * load, 0.2);
+    setP(N.lfBG.gain, lf * lf * (0.02 + 0.07 * load) * att * (cockpit ? 0.6 : 1), 0.15);
+    setP(N.lfW.frequency, (900 + 2100 * lf) * dop, 0.2); setP(N.lfW2.frequency, (960 + 2240 * lf) * dop, 0.2); setP(N.lfWG.gain, lf * (0.006 + 0.022 * load) * att * fore, 0.15); }
 }
 
 // ================= weapons: missiles, bombs, practice target range, explosions =================
@@ -9155,7 +9637,7 @@ function srThrust(thr, V, h, M = 0) {
 // join you as an escort. AI aircraft fly a simple bank-to-turn model and use the same 3D models as you.
 const AI = { list: [], t: 0, flares: [], flareN: 0, warnT: 0, scrT: 0, hostileOn: false, escortOn: false, msg: 0 };
 const HOSTILE_TINT = [0.95, 0.5, 0.42];
-const WING_FOR = { jet: 'jet', f22: 'f22', f35: 'f35' };   // fighters fly with two wingmen in the same type
+const WING_FOR = { jet: 'jet', f22: 'f22', f35: 'f35', f35b: 'f35b' };   // fighters fly with two wingmen in the same type
 // a wingman leaves the formation to chase the nearest bandit and shoots when he has a shot
 function wingEngage(ai, dt) {
   const st = SIM.st; if (st.crashed || !st.airborne) { ai.eng = false; return false; }
@@ -9190,7 +9672,7 @@ function wingEngage(ai, dt) {
   }
   return true;
 }
-const MILITARY = k => k === 'f35' || k === 'jet' || k === 'hyper' || k === 'sr71' || k === 'f22' || k === 'b2';
+const MILITARY = k => k === 'f35' || k === 'f35b' || k === 'jet' || k === 'hyper' || k === 'sr71' || k === 'f22' || k === 'b2';
 const PLAYER_TGT = { get p() { return SIM.st.pos; }, dead: false, kind: 'you' };
 
 function aiMake(kind, role, p, hdg, spd, opt = {}) {
@@ -9831,7 +10313,7 @@ function stepCvn(dt) {
     if (l[0] < k.x1 && over) { const lat = V3.dot(rel, s.r); st.vel = V3.add(st.vel, V3.add(V3.mul(s.f, 33 * dt), V3.mul(s.r, -lat * Math.min(1, dt * 8)))); }
     else { st.cat = null; ui.toast('AIRBORNE', 'Gear up — positive rate'); radio('paddles', 'off', {}, 1); }
   } else if (onDeck) {
-    const k = CVN.CATS.find(k => cvnCatOK(k.n) && Math.abs(l[2] - k.z) < 7 && l[0] > k.x0 - 18 && l[0] < k.x0 + 12);
+    const k = !a.stovl && CVN.CATS.find(k => cvnCatOK(k.n) && Math.abs(l[2] - k.z) < 7 && l[0] > k.x0 - 18 && l[0] < k.x0 + 12);
     const tgt = k && cvnWorld([k.x0, l[1], k.z]), off = k ? Math.hypot(tgt[0] - st.pos[0], tgt[2] - st.pos[2]) : 0, cr = V3.cross(fw, s.f), yawE = Math.atan2(cr[1], V3.dot(fw, s.f));
     if (k && !P.onCat && V3.dot(fw, s.f) > 0.9 && V3.len(rel) < 6 && !st.arrest && (off > 0.3 || Math.abs(yawE) > 0.008)) {
       // taxied into the catapult area: the director and the hook-up crew guide the nose wheel into the shuttle
@@ -9877,7 +10359,8 @@ function stepCvn(dt) {
     const eps = Math.atan2(hgt, back) / D2R - CVN.GS, line = Math.atan2(lat, back) / D2R; CVN.app = { eps, line, back };
     // approach mode (like the real F-35's precision landing mode): auto-throttle holds approach speed and the jet holds
     // the glide path; the stick nudges the path up or down and you fly the line-up. Switch ASSIST off to fly it raw.
-    if (SIM.opt.assist !== false && back < 3200 && back > 30) {
+    if (SIM.opt.assist !== false && back < 3200 && back > 30 && !a.stovl) {   // (the F-35B comes aboard in the hover instead)
+
       if (!P.apc) { P.apc = true; ui.toast('APPROACH MODE', 'Power and glide path are automatic — steer onto the centreline'); }
       // the computer holds on-speed angle of attack (11°); power holds the glide path; the flaperons add direct lift
       const Vh = Math.hypot(rel[0], rel[2]), want = -Math.tan(CVN.GS * D2R) * Vh + clamp(-eps * D2R * back * 0.3, -5, 3) + (c.pitchT || 0) * 5;
@@ -11484,7 +11967,7 @@ function liveEnvTick() { if (env && env.key === 'live' && performance.now() - EN
 function spawn(showcase) {
   if (!AC[CFG.ac]) CFG.ac = 'sr71';   // an aircraft that was removed (the hypersonic jet)
   const acd = AC[CFG.ac];
-  const sp = spawnFor(acd, { ap: CFG.ap, mode: CFG.start === 'carrier' ? 'runway' : showcase ? (CFG.start === 'air' ? 'runway' : CFG.start) : CFG.start });
+  const sp = spawnFor(acd, { ap: CFG.ap, mode: CFG.start === 'carrier' || CFG.start === 'hover' ? 'runway' : showcase ? (CFG.start === 'air' ? 'runway' : CFG.start) : CFG.start });
   Object.assign(SIM.opt, { load: CFG.load, fuelPct: CFG.fuelPct, failures: CFG.failures, time: CFG.time });
   SIM.st = newState(acd, sp);
   damageReset(); SIM.debris = []; SIM.fx = []; SIM.ev = []; SIM.pend = []; SIM.proj = []; SIM.flash = []; SIM.burners = []; SIM.shake = 0; NUKE.list = []; NUKE.flashK = 0;
@@ -11514,7 +11997,8 @@ function spawn(showcase) {
   cam.init = false; cam.wreckInit = false; flyby.p = null;
   $('crash').classList.add('hidden');
   applyAircraftUI(); updThr(); updSet(); updSys(); updRocketUI();
-  if (CFG.start === 'carrier' && acd.kind === 'fixed') cvnSpawn();   // on the Nimitz's catapult
+  if (CFG.start === 'carrier' && acd.kind === 'fixed') cvnSpawn();   // on the Nimitz's catapult (the F-35B: on the deck, converted, for a short take-off)
+  if (acd.stovl && (CFG.start === 'hover' || CFG.start === 'carrier')) stovlSpawnReady(CFG.start === 'hover' && !showcase);
   if (!showcase) missionSpawned();
   if (acd.airliner && !showcase) { const ap = AIRPORTS.find(x => x.code === CFG.ap) || AIRPORTS[0]; if (ap.len < 2400) setTimeout(() => ui.toast('SHORT RUNWAY', `${ap.code} is ${ap.len} m — a 737 needs about 2,000 m. Bayview (BAY) is built for it`), 600); }
 }
@@ -12323,7 +12807,7 @@ function updateHUD(dt) {
   $('warn').textContent = w.join(' · ');
   const n = nearestAirport(st.pos[0], st.pos[2]);
   const brg = (Math.round(Math.atan2(n.ap.x - st.pos[0], -(n.ap.z - st.pos[2])) / D2R) + 360) % 360;
-  $('status').innerHTML = `${n.ap.code} ${(n.d / 1000).toFixed(1)} km · ${String(brg).padStart(3, '0')}°<br>AGL ${Math.max(0, Math.round(agl * FT))} ft · ${st.g.toFixed(1)} G${(st.brakeT || 0) > 120 ? ` · <span style="color:${st.brakeT > 420 ? '#ff8a6a' : '#ffd27a'}">BRK ${Math.round(st.brakeT + 20)}°C</span>` : ''}` +
+  $('status').innerHTML = `${n.ap.code} ${(n.d / 1000).toFixed(1)} km · ${String(brg).padStart(3, '0')}°<br>AGL ${Math.max(0, Math.round(agl * FT))} ft · ${st.g.toFixed(1)} G${st.acd.stovl && (st.conv > 0 || SIM.ctl.set) ? stovlStatus(st) : ''}${(st.brakeT || 0) > 120 ? ` · <span style="color:${st.brakeT > 420 ? '#ff8a6a' : '#ffd27a'}">BRK ${Math.round(st.brakeT + 20)}°C</span>` : ''}` +
     (a.piston ? `<br>CHT ${Math.round(st.cht)}°C · MIX ${SIM.opt.assist ? 'AUTO' : Math.round(c.mix * 100) + '%'}${st.carbIce > 0.15 ? ' · ICE ' + Math.round(st.carbIce * 100) + '%' : ''}` : '') + (a.kind === 'heli' ? `<br>ROTOR ${Math.round(st.rpm * 100)}%${a.twin ? (st.oei ? ' · ENG 1 OUT' : ' · ENG 1+2') : ''}` : '') + (a.hyper ? `<br>${st.mach > 3 && c.thr > 0.05 ? 'SCRAMJET' : 'TURBINE'} · SKIN ${Math.round(st.skinT)}°C` : '') + (a.f22 ? `<br>${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? ((st.mach || 0) >= 1 ? 'SUPERCRUISE' : 'MIL POWER') : 'ENGINES OFF'} · ${Math.round(st.g * 10) / 10} G · AOA ${Math.round((st.alpha || 0) / D2R)}°` : '') + (a.b2 ? `<br>MACH ${(st.mach || 0).toFixed(2)} · ${Math.round(st.g * 10) / 10} G · BAYS ${(st.bayK || 0) > 0.95 ? 'OPEN' : (st.bayK || 0) > 0.02 ? 'MOVING' : 'CLOSED'} · ${(st.bayK || 0) > 0.3 ? 'RADAR VISIBLE' : 'STEALTH'}` : '') + (a.sr71 ? `<br>KEAS ${Math.round(Math.sqrt(2 * (st.qbar || 0) / 1.225) * KT)} · ${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? 'MIL POWER' : 'ENGINES OFF'}<br>CIT ${Math.round(st.cit || 15)}°C · SKIN ${Math.round(st.skinT)}°C · SPIKES ${Math.round(clamp(((st.mach || 0) - 1.6) / 1.6, 0, 1) * 26)} in` : '') + (st.damage.length ? `<br><span style="color:#ff8a7a">⚠ ${st.damage.join(' · ')}</span>` : '') + (st.engine && st.rpm < 0.25 && st.starting > 0 ? '<br>ENGINE STARTING…' : '') + (SIM.opt.wind !== 'calm' ? `<br>WIND ${String(SIM.opt.windFrom).padStart(3, '0')}° ${Math.round(Math.hypot(SIM.wind[0], SIM.wind[2]) * KT)} kt <span style="display:inline-block;transform:rotate(${(SIM.opt.windFrom - hd + 180)}deg)">↑</span>` : '');
   if (AI.hostileOn && MILITARY(a.key)) $('status').innerHTML += `<br><span style="color:#ffb39f">WAVE ${AI.wave || 1} · ${AI.kills || 0} KILL${AI.kills === 1 ? '' : 'S'}${cvShip() ? ' · ' + cvShip().wing + ' ON DECK' : ''}</span>`;
   { const rp = $('radio'); if (rp && rp.classList.contains('on')) rp.style.top = Math.round($('status').getBoundingClientRect().bottom + 6) + 'px'; }
@@ -12489,7 +12973,13 @@ function updSet() {
   if (a.kind === 'rocket') { $('bSet').style.display = ''; $('bGear').style.display = ''; $('bBrk').style.display = 'none'; updRocketUI(); return; }
   if (a.sr71) { $('bSet').style.display = ''; $('bSetN').textContent = SIM.st.chute === 1 ? 'CHUTE OUT' : SIM.st.chute === 2 ? 'CHUTE GONE' : 'CHUTE'; $('bGear').style.display = ''; $('bBrk').style.display = ''; $('bGearV').textContent = c.gearDown ? 'DOWN' : 'UP'; $('bGear').classList.toggle('on', !c.gearDown); return; }
   $('bSet').style.display = a.sets ? '' : 'none';
-  if (a.sets) { $('bSetN').textContent = (a.vtol ? 'NOZ ' : 'FLP ') + a.sets[c.set] + '°'; }
+  if (a.sets) { const st = SIM.st; $('bSetN').textContent = a.stovl ? (c.set ? (st.fan >= 1 ? 'STOVL' : 'CONV ' + Math.round(((st.conv || 0) * 0.57 + (st.fan || 0) * 0.43) * 100) + '%') : (st.conv > 0 ? 'CTOL ' + Math.round((1 - (st.conv || 0) * 0.57 - (st.fan || 0) * 0.43) * 100) + '%' : 'CTOL')) : (a.vtol ? 'NOZ ' : 'FLP ') + a.sets[c.set] + '°'; }
+  if (a.stovl) {   // the throttle becomes a speed command in STOVL: show the hover mark
+    const on = c.set && (SIM.st.fan || 0) > 0.02; $('thrLab').textContent = on ? 'SPEED' : 'POWER';
+    let dm = $('thrDet'); if (!dm) { dm = document.createElement('div'); dm.id = 'thrDet'; dm.style.cssText = 'position:absolute;left:3px;right:3px;height:2px;background:#6fffa0;box-shadow:0 0 6px #6fffa0;pointer-events:none;border-radius:1px'; $('thr').appendChild(dm);
+      const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;right:4px;top:-13px;font:600 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px'; dm.appendChild(lb); }
+    dm.style.display = on ? '' : 'none'; const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - a.stovl.det) * (H0 - 24) + 11) + 'px';
+  } else if ($('thrDet')) $('thrDet').style.display = 'none';
   $('bGear').style.display = a.retract ? '' : 'none';
   $('bBrk').style.display = a.kind === 'heli' ? 'none' : '';
   $('bGearV').textContent = c.gearDown ? 'DOWN' : 'UP';
@@ -12688,7 +13178,7 @@ function srChute() {
   else { st.chute = 1; st.chuteK = 0; SIM.ev.push({ t: 'clunk', k: 'gear' }); ui.toast('DRAG CHUTE', 'Deployed'); }
   updSet();
 }
-function cycleSet() { const a = SIM.st.acd; if (a.sr71) return srChute(); if (SIM.st.rk) { const rk = SIM.st.rk; rk.eng = rk.eng === 9 ? 3 : rk.eng === 3 ? 1 : 9; SIM.ev.push({ t: 'click' }); updRocketUI(); return; } if (!a.sets) return; SIM.ctl.set = (SIM.ctl.set + 1) % a.sets.length; updSet(); }
+function cycleSet() { const a = SIM.st.acd; if (a.sr71) return srChute(); if (SIM.st.rk) { const rk = SIM.st.rk; rk.eng = rk.eng === 9 ? 3 : rk.eng === 3 ? 1 : 9; SIM.ev.push({ t: 'click' }); updRocketUI(); return; } if (!a.sets) return; if (a.stovl) return stovlToggle(); SIM.ctl.set = (SIM.ctl.set + 1) % a.sets.length; updSet(); }
 function toggleGear() {
   const st = SIM.st, c = SIM.ctl;
   if (st.rk) { c.legsDown = !c.legsDown; SIM.ev.push({ t: 'servo', k: 'gear' }); ui.toast(c.legsDown ? 'LEGS DEPLOYING' : 'LEGS STOWING', c.legsDown ? 'Only put them out low down — they are big airbrakes' : ''); updRocketUI(); return; }
@@ -12719,8 +13209,8 @@ function chips(rowId, items, cur, onPick) {
 }
 const ckReal = m => !!m.eye && !m.noPanel;   // a built cockpit with its own instruments
 let menuTab = 'ac';
-const AC_TAG = a => a.airliner ? 'AIRLINER' : a.kind === 'rocket' ? 'ROCKET' : a.kind === 'heli' ? 'HELICOPTER' : a.vtol ? 'V/STOL JET' : a.hyper ? 'HYPERSONIC' : a.sr71 ? 'RECON JET' : a.b2 ? 'STEALTH BOMBER' : a.f22 || a.f35 ? 'STEALTH FIGHTER' : a.piston ? 'TRAINER' : 'JET';
-const START_LABEL = { carrier: 'Carrier deck', runway: 'Runway', apron: 'Parked', air: 'In the air', cruise: 'Mach 3 cruise' };
+const AC_TAG = a => a.airliner ? 'AIRLINER' : a.kind === 'rocket' ? 'ROCKET' : a.kind === 'heli' ? 'HELICOPTER' : a.vtol || a.stovl ? 'V/STOL JET' : a.hyper ? 'HYPERSONIC' : a.sr71 ? 'RECON JET' : a.b2 ? 'STEALTH BOMBER' : a.f22 || a.f35 ? 'STEALTH FIGHTER' : a.piston ? 'TRAINER' : 'JET';
+const START_LABEL = { carrier: 'Carrier deck', runway: 'Runway', apron: 'Parked', air: 'In the air', cruise: 'Mach 3 cruise', hover: 'Hovering' };
 function menuRender() {
   const A = AC[CFG.ac], rk = A.kind === 'rocket';
   // tabs
@@ -12743,6 +13233,7 @@ function menuRender() {
   $('apRow').parentElement.style.display = rk ? 'none' : '';
   const starts = rk ? [['runway', 'Launch pad'], ['air', 'Landing practice']] : A.sr71 ? [['runway', 'Runway'], ['apron', 'Parked'], ['air', 'Approach'], ['cruise', 'Mach 3 cruise']] : [['runway', 'Runway'], ['apron', A.airliner ? 'At the gate' : 'Parked'], ['air', 'On approach']];
   if (!rk && A.kind === 'fixed' && MILITARY(A.key) && !A.b2 && !A.sr71) starts.unshift(['carrier', 'Carrier deck']);   // fighters can start on the USS Nimitz
+  if (A.stovl) starts.push(['hover', 'Hovering']);
   if (!starts.some(s => s[0] === CFG.start)) CFG.start = 'runway';
   chips('spRow', starts, CFG.start, v => { CFG.start = v; if (!SIM.paused) spawn(true); });
   chips('wxRow', [['clear', 'Clear'], ['scattered', 'Scattered'], ['overcast', 'Overcast'], ['rain', 'Rain']], CFG.weather || 'scattered', v => { CFG.weather = v; G.clouds = buildClouds(G.cloudN || 44, v); setTime(CFG.time); });
@@ -12814,6 +13305,7 @@ function frame(now) {
   render();
   audioUpdate(dt, V3.len(V3.sub(cam.eye, SIM.st.crashed && SIM.st.crashed.main ? SIM.st.crashed.main.pos : SIM.st.pos)), inCk() && appState === 'fly', appState === 'fly' && !portrait);
   if (appState === 'fly') updateHUD(dt);
+  if (appState === 'fly' && st.acd.stovl && (st.conv > 0 && st.conv < 1 || st.fan > 0 && st.fan < 1 || (frame.sk = (frame.sk || 0) + dt) > 0.5)) { frame.sk = 0; updSet(); }
   orbUI();
   requestAnimationFrame(frame);
 }
@@ -13040,7 +13532,7 @@ function screensPaint(st) {
 const hudc = (() => { const cv = document.createElement('canvas'); cv.id = 'hudc'; cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:2;display:none'; document.body.appendChild(cv); return cv; })();
 function drawJetHUD(VP) {
   const st = SIM.st, mdl = G.models[st.acd.key];
-  const show = inCk() && appState === 'fly' && mdl.hud && !st.crashed && (st.engine || st.rpm > 0.05);
+  const show = inCk() && appState === 'fly' && (mdl.hud || mdl.hmd) && !st.crashed && (st.engine || st.rpm > 0.05);
   const W = innerWidth, H = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
   if (hudc.width !== Math.round(W * dpr)) { hudc.width = Math.round(W * dpr); hudc.height = Math.round(H * dpr); }
   const g = hudc.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
@@ -13050,12 +13542,17 @@ function drawJetHUD(VP) {
   const proj = d => { const p = V3.add(cam.eye, V3.mul(d, 1000)), v = [0, 0, 0, 0]; for (let r = 0; r < 4; r++) v[r] = VP[r] * p[0] + VP[4 + r] * p[1] + VP[8 + r] * p[2] + VP[12 + r]; return v[3] > 0 ? [(v[0] / v[3] * 0.5 + 0.5) * W, (0.5 - v[1] / v[3] * 0.5) * H] : null; };
   // the HUD glass sits straight ahead of the seat; clip symbology to it
   const ctr = proj(Q.rot(st.q, [1, 0.0, 0])); if (!ctr) return;
-  const hb = mdl.hud, cn = [[hb.y0, -hb.z], [hb.y0, hb.z], [hb.y1, hb.z], [hb.y1, -hb.z]].map(([y, z]) => proj(V3.norm(Q.rot(st.q, V3.sub([hb.x, y, z], mdl.eye)))));
-  if (cn.some(v => !v)) return;
-  const xs = cn.map(v => v[0]), ys = cn.map(v => v[1]), bw = Math.max(...xs) - Math.min(...xs), bh = Math.max(...ys) - Math.min(...ys);
   const nose = ctr.slice();   // where the nose points (waterline); the layout centres on the combiner
-  ctr[0] = (Math.max(...xs) + Math.min(...xs)) / 2; ctr[1] = Math.min(...ys) + bh * 0.55;
-  g.save(); g.beginPath(); g.moveTo(cn[0][0], cn[0][1]); for (const v of cn.slice(1)) g.lineTo(v[0], v[1]); g.closePath(); g.clip();
+  let bw, bh;
+  if (mdl.hmd) {   // F-35: no HUD glass — the helmet (HMDS) paints the symbology straight onto the visor, wherever you look
+    bw = Math.min(W * 0.6, H * 1.3); bh = H * 0.74; ctr[0] = W / 2; ctr[1] = H * 0.5; g.save();
+  } else {
+    const hb = mdl.hud, cn = [[hb.y0, -hb.z], [hb.y0, hb.z], [hb.y1, hb.z], [hb.y1, -hb.z]].map(([y, z]) => proj(V3.norm(Q.rot(st.q, V3.sub([hb.x, y, z], mdl.eye)))));
+    if (cn.some(v => !v)) return;
+    const xs = cn.map(v => v[0]), ys = cn.map(v => v[1]); bw = Math.max(...xs) - Math.min(...xs); bh = Math.max(...ys) - Math.min(...ys);
+    ctr[0] = (Math.max(...xs) + Math.min(...xs)) / 2; ctr[1] = Math.min(...ys) + bh * 0.55;
+    g.save(); g.beginPath(); g.moveTo(cn[0][0], cn[0][1]); for (const v of cn.slice(1)) g.lineTo(v[0], v[1]); g.closePath(); g.clip();
+  }
   // F-22 style symbology: thin green strokes, airspeed and altitude boxes, heading tape, pitch ladder, flight path marker,
   // waterline, bank scale, and the weapon / mode lines. Collimated: drawn at infinity, so it stays on the horizon as the head moves.
   const GR = 'rgba(110,255,150,0.95)';
@@ -13063,9 +13560,9 @@ function drawJetHUD(VP) {
   const fs = clamp(bw / 22, 8, 15); g.font = `600 ${fs}px Rajdhani, sans-serif`; g.textAlign = 'center';
   const f = Q.rot(st.q, [1, 0, 0]), hd = Math.atan2(f[0], -f[2]), hz = V3.norm([f[0], 0, f[2]]);
   // pitch ladder every 5°: climb bars solid with ends bent toward the horizon, dive bars dashed and angled
-  for (let p = -85; p <= 85; p += 5) {
+  for (let p = -85; p <= 85; p += mdl.hmd ? 10 : 5) {
     const e = p * D2R, d = [hz[0] * Math.cos(e), Math.sin(e), hz[2] * Math.cos(e)], s = proj(d); if (!s) continue;
-    if (Math.hypot(s[0] - ctr[0], s[1] - ctr[1]) > bh * 0.75) continue;
+    if (Math.hypot(s[0] - ctr[0], s[1] - ctr[1]) > bh * (mdl.hmd ? 0.4 : 0.75)) continue;
     const ang = st.rollAng, w = p ? bw * 0.11 : bw * 0.42, gap = p ? bw * 0.045 : bw * 0.04, tk = fs * 0.55;
     g.save(); g.translate(s[0], s[1]); g.rotate(-ang);
     if (p < 0) { g.setLineDash([fs * 0.45, fs * 0.3]); g.rotate(0); }
@@ -13113,6 +13610,7 @@ function drawJetHUD(VP) {
   if (S && S.r) g.fillText(`${S.lo === 'ag' ? 'A/G' : 'A/A'}  120 ${U ? '∞' : S.r.filter(Boolean).length}  9X ${U ? '∞' : S.m.filter(Boolean).length}  GUN ${U ? '∞' : st.ammo || 0}`, ctr[0], yb);
   else if (S) g.fillText(`MSL ${U ? '∞' : S.m.filter(Boolean).length}  ${S.b.length ? 'BOMB ' + (U ? '∞' : S.b.filter(Boolean).length) : ''}`, ctr[0], yb);
   if (st.acd.vtol) { g.textAlign = 'right'; g.fillText(`NOZ ${Math.round(st.noz / D2R)}°`, ctr[0] + bw * 0.46, yb); }
+  if (st.acd.stovl && (st.conv > 0 || SIM.ctl.set)) stovlHMD(g, st, ctr, bw, bh, fs);
   g.restore();
 }
 
