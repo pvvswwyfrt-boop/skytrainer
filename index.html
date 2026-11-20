@@ -397,7 +397,7 @@ function initGL(canvas) {
   const vs = `
     attribute vec3 aPos; attribute vec3 aNor; attribute vec3 aCol; attribute float aMat; attribute vec2 aUV; attribute vec4 aTan;
     varying vec2 vUV; varying vec4 vTan;
-    uniform mat4 uM; uniform mat4 uVP; uniform vec3 uCam; uniform float uFogDen;
+    uniform mat4 uM; uniform mat4 uVP; uniform vec3 uCam; uniform float uFogDen; uniform float uCurv;
     varying vec3 vCol; varying vec3 vNor; varying float vFog; varying vec3 vRel; varying float vMat; varying vec3 vW;
     varying highp vec3 vHP;
     uniform vec4 uApP[3]; uniform vec4 uApS[3];
@@ -411,7 +411,8 @@ function initGL(canvas) {
       vRel = w.xyz - uCam;
       float d = length(vRel) * uFogDen;
       vFog = 1.0 - exp(-d * d);
-      gl_Position = uVP * w;
+      vec2 dcv = w.xz - uCam.xz; vec4 wc = w; wc.y -= dot(dcv, dcv) * uCurv;   // the curved Earth: things drop away with distance (d^2 / 2R)
+      gl_Position = uVP * wc;
     }`;
   const fs = `
     precision mediump float;
@@ -714,6 +715,7 @@ function initGL(canvas) {
         col = skyCol(d);
         col = mix(col, vec3(0.004, 0.008, 0.03), space * smoothstep(0.0, 0.35, d.y) * (1.0 - uAtm.x));   // deep blue-black overhead
         if (uAtm.x > 0.0) col = mix(col, atmSky(d0), uAtm.x);   // the table already knows the earth curves away below a high camera
+        if (uAtm.x > 0.0) col = mix(col, uFogCol, smoothstep(uAtm.y + 0.004, uAtm.y - 0.03, asin(clamp(d0.y, -1.0, 1.0))) * uAtm.x);   // below the true horizon you only ever see the haze over the far ground
         col += vec3(0.25, 0.5, 1.0) * space * exp(-abs(d.y) * 60.0) * 0.55 * max(0.2, uSunCol.r) * (1.0 - uAtm.x);   // the thin glowing limb of the atmosphere
         // sunrise / sunset: warm light along the horizon under the sun, pink twilight belt and the earth's shadow opposite
         float se = uSunDir.y, low = smoothstep(0.35, 0.02, se) * smoothstep(-0.22, -0.02, se) * (1.0 - uAtm.x);
@@ -994,7 +996,7 @@ function initGL(canvas) {
   R.pr = pr;
   R.a = { pos: gl.getAttribLocation(pr, 'aPos'), nor: gl.getAttribLocation(pr, 'aNor'), col: gl.getAttribLocation(pr, 'aCol'), mat: gl.getAttribLocation(pr, 'aMat') };
   R.u = {};
-  for (const n of ['uSky', 'uAtm', 'uSunXZ', 'uAtmG', 'uC3', 'uCFog', 'uC3P', 'uC3W', 'uCWM', 'uCC', 'uCD', 'uScr', 'uNk', 'uWet', 'uWLM', 'uWSMOn', 'uWSM', 'uCl', 'uNCl', 'uSea', 'uWk', 'uWkS', 'uNWk', 'uM', 'uVP', 'uCam', 'uFogDen', 'uSunDir', 'uSunCol', 'uAmb', 'uFogCol', 'uUnlit', 'uAlpha', 'uTint', 'uMode', 'uGrain', 'uTime', 'uZen', 'uHor', 'uGnd', 'uMoonDir', 'uMoonCol', 'uCamMod', 'uPLp', 'uPLc', 'uNPL', 'uSpotP', 'uSpotD', 'uSpotC', 'uFogF', 'uWave', 'uHM', 'uHMax', 'uHMin', 'uHL', 'uTSh', 'uLift', 'uApP', 'uApS', 'uTex', 'uUseTex', 'uNM', 'uRM', 'uMaps', 'uSM', 'uSMOn', 'uLM', 'uCamAlt']) R.u[n] = gl.getUniformLocation(pr, n);
+  for (const n of ['uCurv', 'uSky', 'uAtm', 'uSunXZ', 'uAtmG', 'uC3', 'uCFog', 'uC3P', 'uC3W', 'uCWM', 'uCC', 'uCD', 'uScr', 'uNk', 'uWet', 'uWLM', 'uWSMOn', 'uWSM', 'uCl', 'uNCl', 'uSea', 'uWk', 'uWkS', 'uNWk', 'uM', 'uVP', 'uCam', 'uFogDen', 'uSunDir', 'uSunCol', 'uAmb', 'uFogCol', 'uUnlit', 'uAlpha', 'uTint', 'uMode', 'uGrain', 'uTime', 'uZen', 'uHor', 'uGnd', 'uMoonDir', 'uMoonCol', 'uCamMod', 'uPLp', 'uPLc', 'uNPL', 'uSpotP', 'uSpotD', 'uSpotC', 'uFogF', 'uWave', 'uHM', 'uHMax', 'uHMin', 'uHL', 'uTSh', 'uLift', 'uApP', 'uApS', 'uTex', 'uUseTex', 'uNM', 'uRM', 'uMaps', 'uSM', 'uSMOn', 'uLM', 'uCamAlt']) R.u[n] = gl.getUniformLocation(pr, n);
   for (const k in R.a) gl.enableVertexAttribArray(R.a[k]);
   gl.uniform1i(R.u.uTex, 4); gl.uniform1i(R.u.uNM, 5); gl.uniform1i(R.u.uRM, 6); gl.uniform1i(R.u.uSM, 7); gl.uniform1i(R.u.uWSM, 2); gl.uniform1i(R.u.uCWM, 8); gl.uniform1i(R.u.uCC, 10); gl.uniform1i(R.u.uCD, 11); gl.vertexAttrib4f(5, 1, 0, 0, 1);
   gl.enable(gl.DEPTH_TEST);
@@ -1003,10 +1005,11 @@ function initGL(canvas) {
   // light-point program: runway and street lights stay visible from far away
   // aX = facing direction (x,z; 0 = omni) + flash code: 1 sequenced flasher, 2 REIL strobe, 3 wig-wag, 4 rotating beacon, 5 PAPI (fraction = angle / 10)
   const gvs = `attribute vec3 aPos; attribute float aSize; attribute vec3 aCol; attribute vec3 aX;
-    uniform mat4 uVP; uniform vec3 uCam; uniform float uK; uniform float uScale; uniform float uFogDen; uniform float uT;
+    uniform mat4 uVP; uniform vec3 uCam; uniform float uK; uniform float uScale; uniform float uFogDen; uniform float uT; uniform float uCurv;
     varying vec3 vC; varying float vA;
     void main() { vec3 rel = uCam - aPos; float d = length(rel);
-      gl_Position = uVP * vec4(aPos + rel / max(d, 0.01) * min(d * 0.03, 8.0), 1.0);   // nudged along the view ray so the glow isn't cut by the ground it stands on
+      vec3 pp = aPos + rel / max(d, 0.01) * min(d * 0.03, 8.0); pp.y -= dot(rel.xz, rel.xz) * uCurv;
+      gl_Position = uVP * vec4(pp, 1.0);   // nudged along the view ray so the glow isn't cut by the ground it stands on
       float hd = max(length(rel.xz), 0.01); vec2 tc = rel.xz / hd;
       float dk = length(aX.xy) > 0.5 ? smoothstep(-0.3, 0.4, dot(tc, aX.xy)) : 1.0;
       float code = floor(aX.z + 0.001), ph = aX.z - code, k = uK, sz = aSize; vec3 col = aCol;
@@ -1027,7 +1030,7 @@ function initGL(canvas) {
   gl.bindAttribLocation(gp, 0, 'aPos'); gl.bindAttribLocation(gp, 1, 'aSize'); gl.bindAttribLocation(gp, 2, 'aCol'); gl.bindAttribLocation(gp, 3, 'aX');
   gl.linkProgram(gp);
   R.gp = gp; R.gu = {};
-  for (const n of ['uVP', 'uCam', 'uK', 'uScale', 'uFogDen', 'uT']) R.gu[n] = gl.getUniformLocation(gp, n);
+  for (const n of ['uVP', 'uCam', 'uK', 'uScale', 'uFogDen', 'uT', 'uCurv']) R.gu[n] = gl.getUniformLocation(gp, n);
   gl.useProgram(pr);
   return gl;
 }
@@ -1047,7 +1050,7 @@ function drawGlow(g, vp, cam, k, fogDen, scale) {
   const gl = R.gl;
   gl.useProgram(R.gp);
   gl.uniformMatrix4fv(R.gu.uVP, false, vp); gl.uniform3fv(R.gu.uCam, cam);
-  gl.uniform1f(R.gu.uK, k); gl.uniform1f(R.gu.uScale, scale); gl.uniform1f(R.gu.uFogDen, fogDen); gl.uniform1f(R.gu.uT, (performance.now() / 1000) % 1000);
+  gl.uniform1f(R.gu.uK, k); gl.uniform1f(R.gu.uScale, scale); gl.uniform1f(R.gu.uFogDen, fogDen); gl.uniform1f(R.gu.uCurv, 7.848e-8); gl.uniform1f(R.gu.uT, (performance.now() / 1000) % 1000);
   gl.bindBuffer(gl.ARRAY_BUFFER, g.buf);
   gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 40, 0); gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 40, 12); gl.vertexAttribPointer(2, 3, gl.FLOAT, false, 40, 16); gl.vertexAttribPointer(3, 3, gl.FLOAT, false, 40, 28);
   gl.enable(gl.BLEND); gl.blendFunc(gl.ONE, gl.ONE); gl.depthMask(false);
@@ -1224,6 +1227,7 @@ function draw(mesh, m, o = {}) {
   gl.vertexAttribPointer(R.a.mat, 1, gl.FLOAT, false, 40, 36);
   gl.uniformMatrix4fv(u.uM, false, m);
   gl.uniform1f(u.uFogDen, o.noFog ? 0 : (o.fogMul || 1) * R.fogDen);
+  gl.uniform1f(u.uCurv, o.noDepth ? 0 : 7.848e-8);   // 1 / (2 x Earth radius); the sky dome and stars stay put
   gl.uniform1f(u.uFogF, o.noFog ? 0 : (o.fogMul || 1) * R.fogDen * 1000);
   gl.uniform1f(u.uUnlit, o.unlit || 0);
   gl.uniform1f(u.uAlpha, o.alpha == null ? 1 : o.alpha);
@@ -3632,7 +3636,7 @@ function buildMiamiTerrain() {
   }
   // the land runs on past the 70 km map: the Everglades to the west, Broward to the north, Florida City to the south-west.
   // Each dry edge cell is stretched out to the horizon carrying its edge colour (texture clamps), so there's no square edge.
-  const sk = meshes.F.d, FAR = 260000, E = L / 2;
+  const sk = meshes.F.d, FAR = 13000, E = L / 2;   // out to the regional map (region.js), which carries on from 48 km
   const sv = (x, y, z, ux, uz) => sk.push(x, y, z, 0, 1, 0, 1, 1, 1, 0, clamp(ux, 0.0008, 0.9992), clamp(uz, 0.0008, 0.9992));
   const uvOf = (p) => [(p[0] + E) / L, (p[1] + E) / L], SK_CITY = uvOf(ll(25.70, -80.37)), SK_GLADES = uvOf(ll(25.75, -80.62));
   const skTri = (p, q, r) => {   // same winding rule as the terrain cells: cross(q - p, r - p) points up
@@ -4579,6 +4583,113 @@ function rtTileBuild(ti, tj, lite, D) {
   out.plain = b.build();
   for (const s of TILE_STY) if (TM[s].day.d.length) { out.day.push(TM[s].day.build()); out.night.push(TM[s].night.build()); }
   return out;
+}
+
+// ===================== the region beyond the 70 km map: Florida, the Keys, the Bahamas and northern Cuba =====================
+// Painted from coastline outlines (lat/lon, simplified to a few km) into one big texture and draped on a coarse grid that
+// runs ~600 km out on every side. Shallow banks are turquoise, the Gulf shelf a lighter blue, the Florida Straits deep navy;
+// on land: pine and farmland, the Everglades' sawgrass, Big Cypress, Lake Okeechobee, the sugar fields, and the cities.
+// The grid leaves a hole for the detailed map (and its 13 km skirt); the vertex shader bends it all round the curved Earth.
+const REGION = {
+  box: { lat0: 22.0, lat1: 31.0, lon0: -88.0, lon1: -76.0 }, N: 2048,
+  florida: [[31.0, -87.6], [31.0, -81.5], [30.7, -81.45], [30.3, -81.39], [29.9, -81.29], [29.5, -81.13], [29.1, -80.95], [28.75, -80.72], [28.47, -80.54], [28.2, -80.6], [27.8, -80.42], [27.4, -80.23], [27.0, -80.09], [26.7, -80.03],
+    [26.35, -80.07], [26.05, -80.11], [25.85, -80.12], [25.77, -80.14], [25.6, -80.3], [25.45, -80.33], [25.3, -80.37], [25.2, -80.42], [25.25, -80.6], [25.17, -80.85], [25.14, -81.08], [25.25, -81.15], [25.45, -81.15], [25.65, -81.32],
+    [25.85, -81.6], [26.0, -81.73], [26.15, -81.81], [26.4, -81.88], [26.5, -82.05], [26.7, -82.25], [26.95, -82.35], [27.15, -82.48], [27.35, -82.6], [27.55, -82.73], [27.8, -82.83], [28.1, -82.8], [28.45, -82.68], [28.8, -82.68],
+    [29.05, -82.8], [29.15, -83.05], [29.35, -83.2], [29.6, -83.43], [29.85, -83.7], [30.0, -84.0], [30.05, -84.3], [29.95, -84.4], [29.8, -84.75], [29.65, -85.0], [29.68, -85.3], [29.9, -85.45], [30.1, -85.7], [30.25, -86.0],
+    [30.38, -86.5], [30.38, -86.9], [30.33, -87.2], [30.3, -87.5], [30.25, -87.6]],
+  tampaBay: [[27.6, -82.72], [27.75, -82.55], [27.95, -82.43], [28.02, -82.55], [27.85, -82.7], [27.65, -82.78]],
+  charlotte: [[26.7, -82.15], [26.95, -82.05], [26.95, -82.2], [26.7, -82.25]],
+  glades: [[26.7, -80.7], [26.6, -80.45], [25.9, -80.48], [25.4, -80.55], [25.2, -80.75], [25.15, -81.05], [25.5, -81.2], [25.9, -81.45], [26.2, -81.4], [26.5, -81.1]],
+  cypress: [[26.3, -81.4], [26.2, -80.9], [25.85, -80.85], [25.85, -81.45]],
+  sugar: [[26.75, -80.95], [26.75, -80.45], [26.45, -80.45], [26.45, -80.95]],
+  floridaBay: [[25.25, -80.45], [25.15, -81.1], [24.85, -80.95], [24.95, -80.6], [25.1, -80.42]],
+  keys: [[25.4, -80.21], [25.3, -80.3], [25.15, -80.4], [25.03, -80.5], [24.92, -80.63], [24.83, -80.78], [24.73, -80.95], [24.7, -81.1], [24.67, -81.3], [24.63, -81.5], [24.56, -81.75], [24.55, -81.81]],
+  shelf: [[25.0, -81.9], [24.4, -82.2], [24.4, -83.3], [25.5, -83.6], [26.5, -84.0], [27.5, -84.3], [28.5, -84.6], [29.3, -85.2], [29.6, -86.2], [30.0, -87.7], [30.5, -87.7], [30.5, -82.0]],
+  littleBank: [[27.3, -79.0], [27.2, -77.9], [26.9, -77.0], [26.0, -76.9], [25.95, -77.3], [26.5, -78.3], [26.5, -79.0]],
+  greatBank: [[25.85, -79.32], [25.3, -79.28], [24.6, -79.0], [23.9, -78.9], [23.3, -78.3], [22.6, -77.6], [22.4, -76.6], [22.9, -75.9], [23.6, -75.8], [24.3, -76.2], [24.9, -76.2], [25.6, -76.6], [25.5, -77.2], [25.3, -77.6], [25.85, -78.2], [25.8, -78.9]],
+  tongue: [[24.95, -77.5], [24.8, -77.75], [24.0, -77.55], [23.6, -77.0], [24.0, -76.85], [24.6, -77.2]],
+  calSal: [[24.1, -80.45], [23.95, -79.9], [23.6, -80.0], [23.55, -80.5], [23.85, -80.6]],
+  cubaKeys: [[23.2, -80.6], [22.6, -78.9], [22.4, -78.3], [22.6, -78.2], [23.0, -79.5], [23.2, -80.3]],
+  grandBahama: [[26.7, -79.0], [26.75, -78.6], [26.65, -78.15], [26.6, -77.9], [26.5, -77.95], [26.52, -78.4], [26.5, -78.8]],
+  abaco: [[27.0, -77.65], [26.85, -77.1], [26.3, -77.0], [25.95, -77.25], [26.1, -77.4], [26.6, -77.55]],
+  andros: [[25.15, -78.05], [24.75, -78.3], [24.2, -78.1], [23.95, -77.75], [24.35, -77.7], [24.75, -77.75], [25.05, -77.9]],
+  eleuthera: [[25.55, -76.7], [25.4, -76.4], [25.1, -76.2], [24.75, -76.15], [24.6, -76.3]],
+  exumas: [[24.75, -76.85], [24.35, -76.6], [23.85, -76.25], [23.5, -75.9]],
+  cuba: [[23.15, -82.5], [23.05, -82.0], [23.1, -81.5], [23.2, -81.0], [22.95, -80.3], [22.7, -79.5], [22.4, -78.7], [22.0, -78.0], [21.5, -78.0], [21.5, -85.0], [22.0, -84.9], [22.2, -84.5], [22.6, -84.0], [22.9, -83.3], [23.0, -82.9]],
+  cities: [[25.95, -80.2, 0.16, 0.5], [26.4, -80.13, 0.08, 0.35], [26.7, -80.1, 0.07, 0.3], [27.95, -82.5, 0.2, 0.2], [28.54, -81.38, 0.16, 0.16], [30.33, -81.66, 0.16, 0.16], [26.62, -81.9, 0.12, 0.1], [26.15, -81.78, 0.06, 0.08],
+    [27.33, -82.53, 0.07, 0.1], [23.12, -82.38, 0.12, 0.06], [25.04, -77.35, 0.07, 0.025], [26.53, -78.7, 0.06, 0.03], [30.44, -84.28, 0.1, 0.1], [29.65, -82.33, 0.07, 0.07]],
+};
+function regionUV(lat, lon) { const b = REGION.box; return [(lon - b.lon0) / (b.lon1 - b.lon0), (b.lat1 - lat) / (b.lat1 - b.lat0)]; }
+function regionCanvas() {
+  const q = typeof qual === 'function' ? qual() : null; REGION.N = q && q.dpr >= 2.2 ? 2048 : 1024;   // 4 MB of texture on phones, 16 MB on high settings
+  const N = REGION.N, R = REGION;
+  const mk = n => { const c = document.createElement('canvas'); c.width = c.height = n; return c; };
+  const painter = (g, n) => {
+    const P = (lat, lon) => { const [u, v] = regionUV(lat, lon); return [u * n, v * n]; }, k = n / 2048;
+    return {
+      poly: (pts, fill, stroke, lw) => { g.beginPath(); pts.forEach(([la, lo], i) => { const [x, y] = P(la, lo); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.closePath();
+        if (stroke) { g.strokeStyle = stroke; g.lineWidth = lw * k; g.lineJoin = 'round'; g.stroke(); } if (fill) { g.fillStyle = fill; g.fill(); } },
+      line: (pts, col, lw) => { g.beginPath(); pts.forEach(([la, lo], i) => { const [x, y] = P(la, lo); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.strokeStyle = col; g.lineWidth = lw * k; g.lineCap = g.lineJoin = 'round'; g.stroke(); },
+      ell: (lat, lon, rlat, rlon, col) => { const [x, y] = P(lat, lon), [x2, y2] = P(lat - rlat, lon + rlon); g.beginPath(); g.ellipse(x, y, Math.max(0.5, Math.abs(x2 - x)), Math.max(0.5, Math.abs(y2 - y)), 0, 0, 7); g.fillStyle = col; g.fill(); },
+    };
+  };
+  // soften a canvas: shrink and grow it back a couple of times (a cheap, portable blur)
+  const soften = (c, passes) => { let cur = c; for (let p = 0; p < passes; p++) { const h = mk(cur.width / 2), hg = h.getContext('2d'); hg.imageSmoothingQuality = 'high'; hg.drawImage(cur, 0, 0, h.width, h.height); cur = h; }
+    const out = mk(c.width), og = out.getContext('2d'); og.imageSmoothingQuality = 'high'; og.drawImage(cur, 0, 0, c.width, c.height); return out; };
+  // ---- water, painted small and blurred so the banks and shelves fade into the deep the way they do from orbit
+  const W = mk(512), wg = W.getContext('2d'), w = painter(wg, 512);
+  wg.fillStyle = '#0b1e36'; wg.fillRect(0, 0, 512, 512);
+  w.poly(R.shelf, 'rgb(24,66,96)', 'rgb(20,56,86)', 60);
+  w.poly(R.florida, null, 'rgb(28,86,110)', 22); w.poly(R.cuba, null, 'rgb(26,78,104)', 14);
+  for (const b of [R.littleBank, R.greatBank, R.calSal, R.cubaKeys]) w.poly(b, 'rgb(46,150,160)', 'rgb(34,110,135)', 14);
+  w.poly(R.tongue, 'rgb(16,44,76)', 'rgb(22,64,96)', 8);
+  w.ell(24.9, -77.6, 0.45, 0.5, 'rgba(150,225,205,0.35)'); w.ell(26.6, -78.0, 0.25, 0.6, 'rgba(150,225,205,0.25)');
+  w.poly(R.floridaBay, 'rgb(78,150,140)', null); w.line(R.keys, 'rgb(60,180,170)', 18);
+  const Wb = soften(W, 2);
+  const cv = mk(N), g = cv.getContext('2d'), p = painter(g, N);
+  g.imageSmoothingQuality = 'high'; g.drawImage(Wb, 0, 0, N, N);
+  // ---- land, satellite colours: pine and pasture, sawgrass, cypress, cane fields, lakes, towns
+  const L = mk(1024), lg = L.getContext('2d'), l = painter(lg, 1024);
+  l.poly(R.florida, 'rgb(86,98,62)'); l.poly(R.cuba, 'rgb(82,100,58)');
+  for (const isl of [R.grandBahama, R.abaco, R.andros]) l.poly(isl, 'rgb(120,128,88)', 'rgb(196,190,150)', 3);
+  l.line(R.eleuthera, 'rgb(130,136,96)', 5); l.line(R.exumas, 'rgb(180,176,140)', 3); l.ell(25.04, -77.38, 0.035, 0.12, 'rgb(140,138,110)'); l.ell(25.73, -79.27, 0.03, 0.02, 'rgb(196,190,150)');
+  l.line(R.keys, 'rgb(130,134,100)', 4);
+  l.poly(R.glades, 'rgb(128,124,86)'); l.poly(R.cypress, 'rgb(66,82,50)'); l.poly(R.sugar, 'rgb(104,124,70)');
+  let s = 11; const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let k = 0; k < 260; k++) { const la = 26.9 + rnd() * 3.5, lo = -82.2 + rnd() * 1.8; if (rnd() < 0.35) l.ell(la, lo, 0.012 + rnd() * 0.04, 0.012 + rnd() * 0.04, 'rgb(36,70,84)'); }   // central Florida's lakes
+  l.ell(26.95, -80.82, 0.2, 0.21, 'rgb(40,78,92)');
+  l.poly(R.tampaBay, 'rgb(30,84,108)'); l.poly(R.charlotte, 'rgb(30,84,108)');
+  for (const [la, lo, rlat, rlon] of R.cities) { l.ell(la, lo, rlat, rlon * 0.55, 'rgba(122,118,110,0.7)'); l.ell(la, lo, rlat * 0.5, rlon * 0.3, 'rgba(140,136,128,0.8)'); }
+  l.line([[25.45, -80.36], [25.8, -80.2], [26.2, -80.15], [26.75, -80.1], [27.2, -80.25]], 'rgba(132,128,120,0.75)', 12);
+  g.drawImage(L, 0, 0, N, N);
+  // ---- smooth value noise (no blocks): big soft patches of vegetation, a finer grain, faint speckle
+  const img = g.getImageData(0, 0, N, N), d = img.data, G1 = 96, G2 = 384, n1 = new Float32Array(G1 * G1), n2 = new Float32Array(G2 * G2);
+  for (let i = 0; i < n1.length; i++) n1[i] = rnd() - 0.5; for (let i = 0; i < n2.length; i++) n2[i] = rnd() - 0.5;
+  const vn = (a, G, x, y) => { const fx = x * (G - 1), fy = y * (G - 1), x0 = fx | 0, y0 = fy | 0, tx = fx - x0, ty = fy - y0, x1 = Math.min(G - 1, x0 + 1), y1 = Math.min(G - 1, y0 + 1);
+    const sx = tx * tx * (3 - 2 * tx), sy = ty * ty * (3 - 2 * ty); return (a[y0 * G + x0] * (1 - sx) + a[y0 * G + x1] * sx) * (1 - sy) + (a[y1 * G + x0] * (1 - sx) + a[y1 * G + x1] * sx) * sy; };
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const i = (y * N + x) * 4, r = d[i], gg = d[i + 1], b = d[i + 2], land = gg > b + 4;
+    const big = vn(n1, G1, x / N, y / N), fine = vn(n2, G2, x / N, y / N), n = land ? big * 34 + fine * 16 + (rnd() - 0.5) * 6 : big * 6 + fine * 3;
+    d[i] = clamp(r + n * (land ? 0.9 : 0.6), 0, 255); d[i + 1] = clamp(gg + n, 0, 255); d[i + 2] = clamp(b + n * (land ? 0.55 : 1), 0, 255);
+  }
+  g.putImageData(img, 0, 0);
+  return cv;
+}
+// is this lat/lon land (for the mesh height): sample the painted mask
+function buildRegion() {
+  const cv = regionCanvas(), N = REGION.N, g = cv.getContext('2d'), px = g.getImageData(0, 0, N, N).data;
+  const isLand = (lat, lon) => { const [u, v] = regionUV(lat, lon); if (u < 0 || u > 1 || v < 0 || v > 1) return false; const x = Math.min(N - 1, u * N | 0), y = Math.min(N - 1, v * N | 0), i = (y * N + x) * 4;
+    return px[i + 1] > px[i + 2] + 4; };
+  const tex = rtTex(cv), mb = new TMB(tex), d = mb.d, STEP = 8000, EXT = 600000, HOLE = 48000;
+  const vert = (x, z) => { const [lat, lon] = toLL(x, z), [u, v] = regionUV(lat, lon), inner = Math.abs(x) < HOLE && Math.abs(z) < HOLE, y = inner ? -70 : isLand(lat, lon) ? 0.6 : -6; /* under the detailed map it sinks out of sight */ return [x, y, z, clamp(u, 0, 1), clamp(v, 0, 1)]; };
+  const cache = new Map(), V = (x, z) => { const k = x + ',' + z; let o = cache.get(k); if (!o) cache.set(k, o = vert(x, z)); return o; };
+  const push = p => d.push(p[0], p[1], p[2], 0, 1, 0, 1, 1, 1, 0, p[3], p[4]);
+  for (let z = -EXT; z < EXT; z += STEP) for (let x = -EXT; x < EXT; x += STEP) {
+    if (x > -HOLE && x + STEP < HOLE && z > -HOLE && z + STEP < HOLE) continue;   // well inside the detailed map: nothing needed
+    const a = V(x, z), b = V(x + STEP, z), c = V(x + STEP, z + STEP), e = V(x, z + STEP);
+    push(a); push(c); push(b); push(a); push(e); push(c);
+  }
+  return mb.build();
 }
 
 // ===================== Northrop Grumman B-2A Spirit =====================
@@ -11714,6 +11825,7 @@ function init() {
   buildHeights(); stampRealLand();
   (window.__tm = window.__tm || []).push(['buildHeights();', performance.now() | 0]);
   G.terrain = buildTerrainMesh();
+  G.region = buildRegion();   // Florida, the Keys, the Bahamas and Cuba beyond the detailed map
   (window.__tm = window.__tm || []).push(['G.terrain = buildT', performance.now() | 0]);
   uploadHeightmap(TER.h, WORLD.N + 1, WORLD.L);
   (window.__tm = window.__tm || []).push(['uploadHeightmap(TE', performance.now() | 0]);
@@ -12249,7 +12361,7 @@ function render() {
   const usePost = qual().post && postBegin(cvs.width, cvs.height);
   gl.viewport(0, 0, cvs.width, cvs.height);
   gl.clearColor(env.fog[0], env.fog[1], env.fog[2], 1);
-  const farP = Math.max(60000 + Math.max(0, cam.eye[1]) * 6, SIM.st.rk ? V3.len(V3.sub(SIM.st.pos, cam.eye)) * 1.5 : 0);
+  const farP = Math.max(60000 + Math.max(0, cam.eye[1]) * 6, 4100 * Math.sqrt(Math.max(0, cam.eye[1])),   /* out to the curved horizon (3.57 km x sqrt(height in m)) */ SIM.st.rk ? V3.len(V3.sub(SIM.st.pos, cam.eye)) * 1.5 : 0);
   gl.clearStencil(0);
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT | gl.STENCIL_BUFFER_BIT);
   // in a built flight deck the cabin is drawn in its own pass (below), so the scenery can keep a far-sighted near plane
@@ -12292,6 +12404,7 @@ function render() {
   seaM[0] = seaK; seaM[10] = seaK;
   draw(G.seabed, seaM);
   gl.enable(gl.POLYGON_OFFSET_FILL); gl.polygonOffset(-1, -3);   // land wins the thin strip where it meets the sea
+  if (G.region) draw(G.region, I);
   for (const t of G.terrain) draw(t, I, { mode: 4 });
   gl.disable(gl.POLYGON_OFFSET_FILL);
   draw(G.sea, seaM, { mode: 1, fogMul: 0.35, alpha: 0.999 });
