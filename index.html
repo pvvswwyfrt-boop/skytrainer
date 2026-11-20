@@ -298,17 +298,12 @@ html,body{width:100%;height:100%;background:#0b1a33}
 </div>
 <div id="rotate"><svg viewBox="0 0 24 24"><rect x="7" y="3" width="10" height="18" rx="2"/><path d="M11 18h2"/></svg><b>Turn your phone sideways</b><p>Sky Trainer plays in landscape. The flight is paused until you rotate.</p></div>
 <div id="nogl">This flight sim needs WebGL, which isn't available in this browser.</div>
-<script src="b2data.js"></script>
 <script src="bldgdata.js"></script>
 <script src="ctiles.js"></script>
 <script src="b737data.js"></script>
 <script src="b737ck.js"></script>
-<script src="f22data.js"></script>
-<script src="srdata.js"></script>
-<script src="f35data.js"></script>
 <script src="cvndata.js"></script>
 <script src="f35bdata.js"></script>
-<script src="vox.js"></script>
 <script>
 (() => {
 // ===================== math =====================
@@ -6482,7 +6477,7 @@ function buildF22() {
 // exterior, cockpit, pilot and landing gear from F35D (converted model, see f35data.js). Moving parts: all-moving
 // horizontal tails, flaperons, the gear legs and all six gear doors (hinge lines and angles taken from the model's own
 // retraction animation), canopy glass, pilot with visor, and a single round afterburning nozzle.
-const F35 = { NOZ: F35D.meta.noz };
+const F35 = { get NOZ() { return F35D.meta.noz; } };   // F35D arrives when the F-35 is first picked
 function buildF35() {
   const D = F35D, META = D.meta, parts = [], texs = D.tex.map(t => loadTex(t));
   texs.maps = [loadTex(D.maps[0]), loadTex(D.maps[1])];
@@ -9097,7 +9092,7 @@ function updRocketUI() {
 // exterior from SRD (converted model, see srdata.js), cut into moving parts: all-moving canted fins, inboard and outboard
 // elevons, inlet spikes that slide aft with Mach, gear legs that fold away, the three-canopy drag chute, and the front cockpit
 // with its real instrument faces. Physics hooks: SR.NOZ / NY / NZ (nozzle exits) for the TEB flash and unstart yaw.
-const SR = { NOZ: SRD.meta.noz.x, NY: SRD.meta.noz.y, NZ: SRD.meta.noz.z, NR: SRD.meta.noz.r };
+const SR = { get NOZ() { return SRD.meta.noz.x; }, get NY() { return SRD.meta.noz.y; }, get NZ() { return SRD.meta.noz.z; }, get NR() { return SRD.meta.noz.r; } };   // SRD loads on demand
 function srSurfDecal(group, D, pick, sg, w, h, slot) {   // fit a decal to the skin: centre and averaged normal of the picked vertices
   let c = [0, 0, 0], n = [0, 0, 0], k = 0;
   for (const ch of b7decode(group, D)) for (let i = 0; i < ch.nv; i++) {
@@ -10000,13 +9995,7 @@ function deckBuild() {
   M.cable = (() => { const c = new MB(); c.box([0.5, 0, 0], [1, 0.07, 0.07], [0.62, 0.62, 0.58]); return c.build(); })();
   M.post = (() => { const c = new MB(); c.box([0, 0.12, 0], [0.25, 0.24, 0.25], [0.22, 0.22, 0.24]); return c.build(); })();
   const tx = F35BD.tex.map(t => loadTex(t)); M.f35b = b7meshes('jet', tx, () => 0, F35BD).map(mb => mb.build());
-  for (const k in HOOKS) { const mdl = G.models[k]; if (!mdl) continue; const H = HOOKS[k], m = new MB(); m.mat = 1;
-    const o = (x, y = 0) => [H.p[0] + x, H.p[1] + y, H.p[2]];   // parts are drawn in aircraft coordinates and turn about their pivot
-    m.cyl(o(0), o(-H.L + 0.2), 0.055, 0.05, 8, [0.5, 0.51, 0.53]);
-    for (const x of [-0.5, -1.0, -1.5]) m.cyl(o(x), o(x - 0.18), 0.058, 0.058, 8, [0.06, 0.06, 0.06]);
-    m.box(o(-H.L + 0.12, -0.05), [0.32, 0.17, 0.15], [0.14, 0.14, 0.15]);
-    const ang = hookAng(AC[k]);
-    mdl.parts.push(part(m, H.p, [0, 0, 1], s => (s.hook || 0) * ang, { piece: 'fuse', show: s => (s.hook || 0) > 0.01 })); }
+  // (tailhooks are added to each jet's model when that model is built: deckHook)
   deckCrewReset();
 }
 function deckCrewReset() {
@@ -10115,6 +10104,15 @@ function drawDeck() {
     }
   }
 }
+
+// tailhook: grey arm with black-and-white bands and a dark hook point, swung down about its hinge
+function deckHook(k, mdl) { if (!HOOKS[k] || !mdl || mdl._hook) return; mdl._hook = true; const H = HOOKS[k], m = new MB(); m.mat = 1;
+    const o = (x, y = 0) => [H.p[0] + x, H.p[1] + y, H.p[2]];   // parts are drawn in aircraft coordinates and turn about their pivot
+    m.cyl(o(0), o(-H.L + 0.2), 0.055, 0.05, 8, [0.5, 0.51, 0.53]);
+    for (const x of [-0.5, -1.0, -1.5]) m.cyl(o(x), o(x - 0.18), 0.058, 0.058, 8, [0.06, 0.06, 0.06]);
+    m.box(o(-H.L + 0.12, -0.05), [0.32, 0.17, 0.15], [0.14, 0.14, 0.15]);
+    const ang = hookAng(AC[k]);
+    mdl.parts.push(part(m, H.p, [0, 0, 1], s => (s.hook || 0) * ang, { piece: 'fuse', show: s => (s.hook || 0) > 0.01 })); }
 
 // ===================== Mark 6 combat =====================
 // cannon with tracers and a lead-computing sight, dogfight waves of gun-firing bandits,
@@ -10963,6 +10961,7 @@ function missionInit() {
 function missionUnlocked(i) { return i === 0 || !!(BRAIN.d.missions[MISSIONS[i - 1].id] || {}).done; }
 function missionStart(i) {
   const def = MISSIONS[i]; if (!def) return;
+  if (!acDataReady(def.ac)) { ui.toast('LOADING', 'Downloading the ' + AC[def.ac].name); return void needAc(def.ac).then(() => missionStart(i)).catch(() => ui.toast('COULD NOT LOAD', 'Check your connection')); }
   if (!MISSION.saved) MISSION.saved = { ac: CFG.ac, time: CFG.time, start: CFG.start, ap: CFG.ap, navy: CFG.navy, intercept: CFG.intercept };
   Object.assign(CFG, { ac: def.ac, time: def.time, start: def.start, ap: 'MIA', navy: true, intercept: true });
   MISSION.on = true; MISSION.i = i; MISSION.def = def; MISSION.fresh = true;
@@ -11419,6 +11418,56 @@ const gl = initGL(cvs);
 
 const CFG = { ac: 'trainer', ap: 'MIA', start: 'runway', time: 'noon', wind: 'calm', windFrom: 270, crashes: true, infFuel: false, assist: true, invert: false, tilt: false, traffic: true, intercept: true, navy: true, wpnCam: true, impactCam: true, unlimitedWpn: true, sound: true, load: 'normal', fuelPct: 80, failures: false, quality: 'auto', livery: 'rescue' };
 try { Object.assign(CFG, JSON.parse(localStorage.getItem('skytrainer-mk8') || '{}')); } catch (e) {}
+// ---- aircraft data loads on demand: only the aircraft you fly (plus the traffic) is in memory, not all of them ----
+const AC_DATA = { f22: ['f22data.js'], f35: ['f35data.js'], sr71: ['srdata.js'], b2: ['b2data.js'] };
+const DLOAD = {};
+function loadData(f) {
+  if (DLOAD[f]) return DLOAD[f];
+  const p = new Promise((res, rej) => { const s = document.createElement('script'); s.src = f; s.async = true;
+    s.onload = () => { p.done = true; res(); }; s.onerror = () => { delete DLOAD[f]; s.remove(); rej(new Error('Could not load ' + f)); }; document.head.appendChild(s); });
+  return (DLOAD[f] = p);
+}
+function acDataReady(k) { return (AC_DATA[k] || []).every(f => DLOAD[f] && DLOAD[f].done); }
+function needAc(k) { return Promise.all((AC_DATA[k] || []).map(loadData)); }
+let ACLOAD = null;
+// ---- crash guard: errors get an on-screen report you can screenshot; if the phone kills the page (out of memory) the
+//      next launch says so and steps quality down; if the graphics memory is lost the game restarts itself cleanly
+function errBox(title, msg) {
+  let b = document.getElementById('errBox');
+  if (!b) { b = document.createElement('div'); b.id = 'errBox';
+    b.style.cssText = 'position:fixed;left:50%;top:12px;transform:translateX(-50%);max-width:86vw;z-index:99999;background:rgba(40,8,8,0.94);color:#ffd9d0;border:1px solid #ff7b62;border-radius:10px;padding:10px 12px;font:12px/1.35 ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;box-shadow:0 6px 24px rgba(0,0,0,.5)';
+    b.onclick = () => b.remove(); document.body.appendChild(b); }
+  b.textContent = `⚠ ${title}\n${msg}\n\nScreenshot this and send it to Claude · tap to close`;
+}
+function crashGuard() {
+  if (crashGuard.on) return; crashGuard.on = true;
+  const seen = new Set();
+  const rep = (m, st) => { const k = String(m).slice(0, 160); if (seen.has(k)) return; seen.add(k);
+    errBox('ERROR', `${String(m).slice(0, 300)}\n${String(st || '').split('\n').slice(0, 3).join('\n').slice(0, 400)}\n${(SIM.st && SIM.st.acd ? SIM.st.acd.key : '?')} · ${CFG.quality} · Mark 9`); };
+  addEventListener('error', e => rep(e.message, e.error && e.error.stack));
+  addEventListener('unhandledrejection', e => rep(e.reason && e.reason.message || e.reason, e.reason && e.reason.stack));
+  // did the last session end without a clean exit? (iOS kills a page that runs out of memory)
+  let last = null; try { last = JSON.parse(localStorage.getItem('st-alive') || 'null'); } catch (e) {}
+  if (last && !last.clean && Date.now() - last.t < 6 * 3600e3 && last.fly) {
+    setTimeout(() => ui.toast('LAST FLIGHT CLOSED UNEXPECTEDLY', CFG.quality === 'low' ? 'The phone ran out of memory' : 'Probably out of memory — graphics set one step lower'), 1500);
+    if (CFG.quality !== 'low') { CFG.quality = { max: 'high', high: 'medium', medium: 'low', auto: 'low' }[CFG.quality] || 'low'; saveCFG(); }
+  }
+  const beat = clean => { try { localStorage.setItem('st-alive', JSON.stringify({ t: Date.now(), clean, fly: appState === 'fly', ac: CFG.ac, q: CFG.quality, tiles: CITY_T.tiles.size })); } catch (e) {} };
+  beat(false); setInterval(() => beat(false), 4000);
+  addEventListener('pagehide', () => beat(true));
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') beat(true); else beat(false); });
+  cvs.addEventListener('webglcontextlost', e => { e.preventDefault(); beat(true); errBox('GRAPHICS RESET', 'The phone took back the graphics memory. Restarting…'); setTimeout(() => location.reload(), 1200); }, false);
+}   // the aircraft being fetched, while it downloads
+// free an aircraft's GPU buffers and textures when you switch away from it (the traffic types stay)
+function freeModel(k) {
+  const m = G.models && G.models.__raw && G.models.__raw[k]; if (!m || ['trainer', 'b737', 'jet'].includes(k)) return;
+  const gl = R.gl, texs = new Set();
+  const dm = me => { if (!me) return; if (me.buf) gl.deleteBuffer(me.buf); for (const t of [me.tex, me.nm, me.rm]) if (t && t.t) texs.add(t.t); };
+  for (const p of m.parts || []) dm(p.mesh);
+  for (const k2 in m.pieces || {}) { dm(m.pieces[k2].mesh); dm(m.pieces[k2].debrisMesh); }
+  for (const t of texs) gl.deleteTexture(t);
+  delete G.models.__raw[k];
+}
 const saveCFG = () => { try { localStorage.setItem('skytrainer-mk8', JSON.stringify(CFG)); } catch (e) {} };
 
 let G = {};          // GPU resources
@@ -11487,6 +11536,9 @@ const ui = {
 
 function init() {
   if (!gl) { $('nogl').style.display = 'flex'; return; }
+  if (!init.ready) { if (!AC[CFG.ac]) CFG.ac = 'trainer'; needAc(CFG.ac).catch(() => { CFG.ac = 'trainer'; }).then(() => { init.ready = true; init(); }); return; }   // the saved aircraft's data first
+  setTimeout(() => loadData('vox.js').catch(() => {}), 5000);   // radio voices: not needed straight away
+  crashGuard();
   buildHeights(); stampRealLand();
   (window.__tm = window.__tm || []).push(['buildHeights();', performance.now() | 0]);
   G.terrain = buildTerrainMesh();
@@ -11517,9 +11569,14 @@ function init() {
   G.wpn = { m: (() => { const b = new MB(); mslMesh(b, [0, 0, 0]); return b.build(); })(), b: (() => { const b = new MB(); bombMesh(b, [0, 0, 0]); return b.build(); })(), n: (() => { const b = new MB(); nukeMesh(b, [0, 0, 0]); return b.build(); })(), ng: (() => { const b = new MB(); gnukeMesh(b, [0, 0, 0]); return b.build(); })() };
   G.disc = (() => { const b = new MB(); b.cyl([0, 0, 0], [0, 0.02, 0], 1, 1, 28, [1, 1, 1]); return b.build(); })();
   G.papi = (() => { const m = new MB(); m.box([0, 0, 0], [2.2, 1.2, 2.2], [1, 1, 1]); return m.build(); })();
-  G.models = {};
-  G.models = {};
-  for (const k in AC) G.models[k] = AC[k].build();
+  // aircraft models are built the first time they're needed (and only once their data has arrived)
+  const RAW = {};
+  G.models = new Proxy(RAW, {
+    get(t, k) { if (k === '__raw') return t; if (typeof k !== 'string') return t[k];
+      if (!(k in t) && AC[k] && acDataReady(k)) { const m = AC[k].build(); if (typeof deckHook === 'function') deckHook(k, m); t[k] = m; }
+      return t[k]; },
+    set(t, k, v) { if (v && typeof deckHook === 'function') deckHook(k, v); t[k] = v; return true; },
+  });
   window.__tm.push(['models', performance.now() | 0, G.terrain.map(t => t.n / 3)]);
   atmInit(); window.__tm.push(['atmos', performance.now() | 0, ATM.on, Math.round(ATM.built || 0)]);
   setTime(CFG.time);
@@ -11537,6 +11594,13 @@ function liveEnvTick() { if (env && env.key === 'live' && performance.now() - EN
 // ---------------- spawning ----------------
 function spawn(showcase) {
   if (!AC[CFG.ac]) CFG.ac = 'sr71';   // an aircraft that was removed (the hypersonic jet)
+  if (!acDataReady(CFG.ac)) {   // fetch this aircraft first, then come back
+    const k = CFG.ac; ACLOAD = k; ui.toast('LOADING ' + AC[k].name.toUpperCase(), 'Downloading the aircraft…');
+    needAc(k).then(() => { if (ACLOAD === k) ACLOAD = null; if (CFG.ac === k) spawn(showcase); })
+      .catch(e => { ACLOAD = null; ui.toast('COULD NOT LOAD', (e && e.message) || 'Check your connection and try again'); });
+    return;
+  }
+  if (SIM.st && SIM.st.acd && SIM.st.acd.key !== CFG.ac) freeModel(SIM.st.acd.key);
   const acd = AC[CFG.ac];
   const sp = spawnFor(acd, { ap: CFG.ap, mode: CFG.start === 'carrier' || CFG.start === 'hover' ? 'runway' : showcase ? (CFG.start === 'air' ? 'runway' : CFG.start) : CFG.start });
   Object.assign(SIM.opt, { load: CFG.load, fuelPct: CFG.fuelPct, failures: CFG.failures, time: CFG.time });
@@ -12843,7 +12907,8 @@ function menuRender() {
 }
 let menuT = 0;
 function openMenu() { voxStop(); document.body.classList.add('inmenu'); menuT = performance.now(); $('wpn').style.display = 'none'; $('dash').style.display = 'none'; SIM.paused = appState === 'fly' && !SIM.st.crashed; appState = 'menu'; $('sys').classList.remove('open'); menuRender(); $('menu').classList.remove('hidden'); }
-function closeMenu() { document.body.classList.remove('inmenu'); $('dash').style.display = inCk() && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; appState = 'fly'; SIM.paused = false; $('menu').classList.add('hidden'); applyAircraftUI(); }
+function closeMenu() { if (ACLOAD) return ui.toast('STILL LOADING', 'One moment — the aircraft is downloading'); closeMenu2(); }
+function closeMenu2() { document.body.classList.remove('inmenu'); $('dash').style.display = inCk() && !ckReal(G.models[SIM.st.acd.key]) ? 'block' : 'none'; appState = 'fly'; SIM.paused = false; $('menu').classList.add('hidden'); applyAircraftUI(); }
 
 // ---------------- main loop ----------------
 let last = performance.now(), acc = 0;
