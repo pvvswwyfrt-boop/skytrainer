@@ -4956,6 +4956,129 @@ function b2rktParts(parts) {
 }
 const O3 = [0, 0, 0];
 
+// ===================== Boeing AH-64D Apache Longbow =====================
+// Model: "Boeing AH-64D Apache Combat Helicopter" by Muhamad Mirza Arrafi (CC BY 4.0), split up here into the main rotor
+// (four blades + hub, with the Longbow radome fixed on top of the mast), the four-blade tail rotor on the left of the fin,
+// the M230 30 mm chain gun turret under the nose, and the eight AGM-114 Hellfires on the inner pylons.
+// In the real aircraft the front-seat co-pilot/gunner works the gun; here it's yours: in the cockpit it's slaved to where
+// you look (as the Apache's IHADSS helmet sight does), from outside it follows the nose, and it snaps onto a target near
+// the crosshair. 625 rounds a minute, 1,200 rounds, 30 mm high-explosive dual-purpose.
+const AH64 = { GUN_V: 805, RATE: 625 / 60, AZ: 110 * D2R, EL_UP: 11 * D2R, EL_DN: 60 * D2R, BARREL: 1.95, RKT: 38 };
+function buildAH64() {
+  const D = AH64D, M = D.meta, parts = [], texs = D.tex.map(t => loadTex(t));
+  const Z = () => 0, O = [0, 0, 0], Y = [0, 1, 0], S = s => s.st || {};
+  const add = (group, piece, pivot, axis, angle, opts = {}) => { for (const mb of b7meshes(group, texs, () => 0, D)) parts.push(part(mb, pivot, axis, angle, { piece, ...opts })); };
+  add('body', 'fuse', O, Y, Z, { twoSided: true }); add('gear', 'gear', O, Y, Z);
+  // main rotor: blades and hub turn on the mast; cyclic tilts the disc
+  const H = M.hub, cyc = [{ pivot: H, axis: [0, 0, 1], angle: s => clamp(s.pitch, -1, 1) * 0.06 }, { pivot: H, axis: [1, 0, 0], angle: s => clamp(s.roll, -1, 1) * 0.06 }];
+  add('rotor', 'rotor', H, Y, s => -s.prop, { outer: cyc, twoSided: true });
+  add('hub', 'rotor', H, Y, s => -s.prop, { outer: cyc, twoSided: true });
+  { const m = AMB(); m.cyl([H[0], H[1] - 0.02, 0], [H[0], H[1] + 0.02, 0], 7.3, 7.3, 28, [0.12, 0.12, 0.1]);
+    parts.push(part(m, H, Y, Z, { piece: 'rotor', outer: cyc, alpha: s => s.rpm > 0.35 ? 0.12 * Math.min(1, s.rpm) : 0, twoSided: true })); }
+  // tail rotor: on the left of the fin, axis across the aircraft, 4.7 x main rotor speed
+  add('trotor', 'boom', M.tr, [0, 0, 1], s => s.prop * 4.7, { twoSided: true });
+  { const m = AMB(); m.cyl([M.tr[0], M.tr[1], M.tr[2] - 0.02], [M.tr[0], M.tr[1], M.tr[2] + 0.02], 1.4, 1.4, 16, [0.12, 0.12, 0.1]);
+    parts.push(part(m, M.tr, [0, 0, 1], Z, { piece: 'boom', alpha: s => s.rpm > 0.35 ? 0.1 : 0, twoSided: true })); }
+  // M230 turret: azimuth about its vertical axis, the gun elevates on its trunnion
+  add('gun', 'fuse', M.gunEl, [0, 0, 1], s => S(s).gunEl || 0, { outer: { pivot: M.gunAz, axis: Y, angle: s => S(s).gunAz || 0 } });
+  // Hellfires: each one disappears from its rail when fired
+  for (let k = 0; k < 8; k++) add('hf' + k, 'fuse', O, Y, Z, { show: s => { const st = S(s); return !st.stores || !st.stores.m || st.stores.m[k] !== false; } });
+  // canopy: tinted, see-through from inside
+  add('canopy', 'fuse', O, Y, Z, { twoSided: true, alpha: s => s.inside ? 0.12 : 0.9 });
+  const piece = (groups, mass) => {
+    let mn = [1e9, 1e9, 1e9], mx = [-1e9, -1e9, -1e9];
+    for (const g of groups) { const b = M[g]; for (let k = 0; k < 3; k++) { mn[k] = Math.min(mn[k], b.mn[k]); mx[k] = Math.max(mx[k], b.mx[k]); } }
+    const c = V3.mul(V3.add(mn, mx), 0.5), half = V3.mul(V3.sub(mx, mn), 0.5), corners = [];
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) for (const sz of [-1, 1]) corners.push([sx * half[0], sy * half[1], sz * half[2]]);
+    const deb = b7meshes(groups[0], texs, () => 0, D)[0];
+    return { mesh: null, debrisMesh: deb ? deb.build() : null, c, half: half.map(v => Math.max(v, 0.3)), corners, mass };
+  };
+  const pieces = { fuse: piece(['body'], 0.7), rotor: piece(['rotor'], 0.12), boom: piece(['trotor'], 0.08), gear: piece(['gear'], 0.06) };
+  const lights = navLights([-0.4, -0.35, 2.75], [-11.0, 0.3, 0], [-1.0, 1.25, 0]);
+  return { parts, pieces, lights, eye: [M.eye[0] + 0.1, M.eye[1] + 0.22, 0], len: 17.7, span: 14.6, hmd: true };
+}
+
+// ---- the gun: where it should point, and slewing the turret there ----
+function ah64AimTargets() {
+  const out = [];
+  for (const ai of AI.list) if (!ai.dead && ai.role === 'hostile') out.push(ai);
+  for (const s of SAMS.sites) if (!s.dead) out.push(s);
+  for (const t of RANGE.targets) if (!t.dead) out.push(t);
+  for (const s of NAVY.ships) if (!s.dead && !(s.sink > 0)) out.push(s);
+  return out;
+}
+function ah64Aim(st) {
+  const ck = typeof inCk === 'function' && inCk();
+  let dir = ck ? V3.norm(V3.sub(cam.at, cam.eye)) : Q.rot(st.q, [Math.cos(0.07), -Math.sin(0.07), 0]);   // helmet-slaved in the cockpit, boresight from outside
+  // target near the line of sight (within ~12°, 4 km): the sight locks on
+  let best = null, bd = 0.21;
+  for (const t of ah64AimTargets()) { const r = V3.sub(t.p, st.pos), d = V3.len(r); if (d > 4000 || d < 30) continue; const ang = Math.acos(clamp(V3.dot(V3.mul(r, 1 / d), dir), -1, 1)); if (ang < bd) { bd = ang; best = t; } }
+  st.gunTgt = best;
+  let pt;
+  if (best) { const d = V3.len(V3.sub(best.p, st.pos)), tof = d / AH64.GUN_V, tv = best.v || [0, 0, 0];
+    pt = V3.add(best.p, V3.mul(V3.sub(tv, st.vel), tof)); pt[1] += 0.5 * GRAV * tof * tof + (best.hdg !== undefined ? 0 : 1); }
+  else { // along the line of sight to the ground (or 1.5 km out)
+    let r = 1500; for (let k = 50; k <= 3000; k += 50) { const p = V3.add(cam.eye && ck ? cam.eye : st.pos, V3.mul(dir, k)); if (p[1] <= surfaceAt(p[0], p[2]).h) { r = k; break; } }
+    pt = V3.add(ck ? cam.eye : st.pos, V3.mul(dir, r)); const tof = r / AH64.GUN_V; pt[1] += 0.5 * GRAV * tof * tof; }
+  st.gunAim = pt;
+  return pt;
+}
+function ah64StepTurret(st, dt) {
+  const M = AH64D.meta, pt = ah64Aim(st);
+  const rel = Q.inv(st.q, V3.sub(pt, V3.add(st.pos, Q.rot(st.q, M.gunAz))));
+  const az = clamp(Math.atan2(-rel[2], rel[0]), -AH64.AZ, AH64.AZ), el = clamp(Math.atan2(rel[1], Math.hypot(rel[0], rel[2])), -AH64.EL_DN, AH64.EL_UP);
+  st.gunAz = (st.gunAz || 0) + clamp(az - (st.gunAz || 0), -2.1 * dt, 2.1 * dt);   // ~120°/s in azimuth
+  st.gunEl = (st.gunEl || 0) + clamp(el - (st.gunEl || 0), -1.6 * dt, 1.6 * dt);
+  const yaw = Math.atan2(-rel[2], rel[0]); st.gunLimit = Math.abs(yaw) > AH64.AZ;
+}
+function ah64GunDir(st) { const a = st.gunAz || 0, e = st.gunEl || 0; return Q.rot(st.q, [Math.cos(e) * Math.cos(a), Math.sin(e), -Math.cos(e) * Math.sin(a)]); }
+function ah64Muzzle(st) { const M = AH64D.meta; return V3.add(V3.add(st.pos, Q.rot(st.q, M.gunEl)), V3.mul(ah64GunDir(st), AH64.BARREL)); }
+
+// ---- Hellfire: on the target under the sight (radar / laser lock), or straight down the line of sight ----
+function fireHellfire() {
+  const st = SIM.st, a = st.acd, S = st.stores;
+  const i = S.m.indexOf(true);
+  if (i < 0 && !CFG.unlimitedWpn) return ui.toast('NO HELLFIRES', 'Land, stop, and REARM');
+  const k = i < 0 ? 0 : i; if (!CFG.unlimitedWpn) S.m[k] = false;
+  ah64Aim(st);
+  const tgt = st.gunTgt || null, loc = a.weapons.m[k], p = V3.add(st.pos, Q.rot(st.q, loc));
+  const dir = V3.norm(V3.sub(st.gunAim, p));
+  const pr = { kind: 'm', hf: true, p, v: V3.add(st.vel, V3.mul(Q.rot(st.q, [1, 0, 0]), 25)), t: 0, q: st.q.slice(), target: tgt, aimP: tgt ? null : st.gunAim.slice(), trail: 0 };
+  if (!tgt) pr.v = V3.add(st.vel, V3.mul(dir, 30));
+  SIM.proj.push(pr); wcamStart(pr); SIM.ev.push({ t: 'launch' });
+  ui.toast(tgt ? 'HELLFIRE AWAY' : 'HELLFIRE — NO LOCK', tgt ? `AGM-114 on ${tgt.name || tgt.kind || 'the target'} · ${(V3.len(V3.sub(tgt.p, st.pos)) / 1000).toFixed(1)} km` : 'Flying down your line of sight — put a target in the crosshair for a lock');
+  if (typeof updWpn === 'function') updWpn();
+}
+// ---- Hydra 70 rockets: a pair per press, one from each pod, unguided ----
+function fireRockets() {
+  const st = SIM.st;
+  if (st.onGround) return ui.toast('ROCKETS', 'Weapons are safe on the ground');
+  if ((st.rockets || 0) <= 0 && !CFG.unlimitedWpn) return ui.toast('NO ROCKETS', 'Land, stop, and REARM');
+  for (const z of [2.9, -2.9]) {
+    if (!CFG.unlimitedWpn) st.rockets = Math.max(0, (st.rockets || 0) - 1);
+    const p = V3.add(st.pos, Q.rot(st.q, [0.9, -0.6, z])), d = Q.rot(st.q, [Math.cos(0.035), -Math.sin(0.035), 0]);
+    const sp = [(Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012];
+    SIM.proj.push({ kind: 'k', p, v: V3.add(st.vel, V3.mul(V3.norm(V3.add(d, sp)), 40)), t: 0, q: st.q.slice(), trail: 0 });
+  }
+  SIM.ev.push({ t: 'launch', v: 0.6 }); SIM.shake = Math.max(SIM.shake || 0, 0.15);
+  if (typeof updWpn === 'function') updWpn();
+}
+// on-screen sight for the Apache: crosshair where the gun is pointing, a box on a locked target, rounds/missiles/rockets left
+function apacheCues(g, VP, W, H) {
+  const st = SIM.st; if (!st.acd.ah64 || st.crashed || appState !== 'fly' || !st.gunAim) return false;
+  const P = p => { const v = [0, 0, 0, 0]; for (let r = 0; r < 4; r++) v[r] = VP[r] * p[0] + VP[4 + r] * p[1] + VP[8 + r] * p[2] + VP[12 + r]; return v[3] > 0 ? [(v[0] / v[3] * 0.5 + 0.5) * W, (0.5 - v[1] / v[3] * 0.5) * H] : null; };
+  g.save(); g.strokeStyle = g.fillStyle = 'rgba(120,255,140,0.95)'; g.lineWidth = 1.6; g.font = '600 12px Rajdhani, sans-serif'; g.textAlign = 'center';
+  // where the rounds will land: along the barrel to the aim distance
+  const d = V3.len(V3.sub(st.gunAim, st.pos)), mz = ah64Muzzle(st), gd = ah64GunDir(st), tof = d / AH64.GUN_V;
+  const hit = V3.add(V3.add(mz, V3.mul(gd, d)), [0, -0.5 * GRAV * tof * tof, 0]), s = P(hit);
+  if (s) { const r = 11; g.beginPath(); g.moveTo(s[0] - r * 2, s[1]); g.lineTo(s[0] - r, s[1]); g.moveTo(s[0] + r, s[1]); g.lineTo(s[0] + r * 2, s[1]); g.moveTo(s[0], s[1] - r * 2); g.lineTo(s[0], s[1] - r); g.moveTo(s[0], s[1] + r); g.lineTo(s[0], s[1] + r * 2); g.stroke();
+    g.beginPath(); g.arc(s[0], s[1], 2, 0, 7); g.fill(); if (st.gunLimit) g.fillText('LIMIT', s[0], s[1] + 34); }
+  if (st.gunTgt) { const t = P(st.gunTgt.p); if (t) { g.strokeRect(t[0] - 16, t[1] - 16, 32, 32); g.fillText(`${(V3.len(V3.sub(st.gunTgt.p, st.pos)) / 1000).toFixed(1)} km`, t[0], t[1] - 22); } }
+  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 14, H - 92);
+  g.restore();
+  return true;
+}
+
 // ===================== aircraft models (low-poly, original designs) =====================
 // body axes: x forward, y up, z right. Metres from the centre of gravity.
 // Each model is split into breakable pieces so it can come apart realistically.
@@ -6017,6 +6140,28 @@ const AC = {
       { p: [0, 1.8, 0.7], piece: 'fuse', kind: 'fuse', n: 'Cabin' }, { p: [0, 1.8, -0.7], piece: 'fuse', kind: 'fuse', n: 'Cabin' }],
     collapse: 3, camDist: 17, tips: 'Collective to ~62% to hover. Push the cyclic to fly forward; pedals turn the nose.',
     airSpawn: 30, help: 'Left slider = collective (about 62% hovers). Stick = cyclic: tilt the rotor to move. The bottom bar is the tail-rotor pedals. Rotor torque pushes the nose around unless Assist is on.',
+  },
+  ah64: {
+    key: 'ah64', name: 'AH-64D Apache', sub: 'Longbow attack helicopter · 30 mm cannon', kind: 'heli', build: buildAH64, ah64: true, disc: 168,
+    // 11,800 lb empty (D), 2,440 lb internal fuel; with crew, 1,200 rounds and 8 Hellfires it's at the normal 16,000 lb mission weight
+    mass: 6150, fuelMax: 1110, burn: 0.16, I: [9000, 34000, 30000],
+    // two T700-GE-701C, 1,890 shp each: enough to hover out of ground effect at mission weight with margin, climbs ~2,500 ft/min
+    TMAX: 1.4 * 7260 * 9.81, CDA: [2.6, 32, 20], CYC: [36000, 0, 78000], PED: 46000, DAMP: [26000, 52000, 62000], TORQ: 16000,
+    spool: 0.4, startTime: 12,
+    weapons: { m: [[-0.04, -0.71, -1.98], [-0.04, -1.06, -1.95], [-0.04, -1.06, -1.65], [-0.04, -0.71, -1.62], [-0.04, -0.69, 1.68], [-0.04, -1.06, 1.71], [-0.04, -1.05, 2.0], [-0.04, -0.7, 2.04]], b: [] },
+    gear: [
+      { p: [0.67, -1.64, 0.97], k: 160000, c: 16000, brake: true, piece: 'gear' }, { p: [0.67, -1.64, -0.97], k: 160000, c: 16000, brake: true, piece: 'gear' },
+      { p: [-10.6, -1.64, 0], k: 60000, c: 6000, piece: 'gear' }],
+    hard: [
+      { p: [-11.0, 1.4, -0.74], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' }, { p: [-11.0, 2.3, 0], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' },
+      { p: [7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' }, { p: [-7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' },
+      { p: [0, 2.04, 7.2], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' }, { p: [0, 2.04, -7.2], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' },
+      { p: [5.1, -0.6, 0], piece: 'fuse', kind: 'fuse', n: 'Nose' }, { p: [2.4, -1.2, 0], piece: 'fuse', kind: 'fuse', n: 'Gun turret' },
+      { p: [-1.5, -1.0, 0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.5, -1.0, -0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' },
+      { p: [-0.3, -0.35, 2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }, { p: [-0.3, -0.35, -2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }],
+    collapse: 3.5, camDist: 24, airSpawn: 35, airThr: 0.62,
+    tips: 'Collective (left slider) to about 60% to hover. Push the cyclic to fly forward; pedals turn the nose. GUN fires the 30 mm cannon: in the cockpit it points where you look, from outside it follows the nose, and the sight snaps onto a target near the crosshair (green box). MSL fires a Hellfire at the boxed target; BOMB fires a pair of Hydra rockets straight ahead.',
+    help: 'The AH-64D Apache Longbow: two General Electric T700-GE-701C turboshafts of 1,890 shp, a 14.6 m four-blade main rotor, a four-blade tail rotor set in a non-orthogonal X, and the Longbow fire-control radar on top of the mast. Never-exceed 197 kt, cruise about 143 kt, climb about 2,500 ft/min, ceiling 21,000 ft. The M230 chain gun under the nose fires 30 mm rounds at 625 a minute from a 1,200-round magazine; in the real helicopter it belongs to the front-seat co-pilot/gunner, here you fly and fight. 8 AGM-114 Hellfires on the inner pylons, two 19-shot Hydra 70 rocket pods outside. 3D model: “Boeing AH-64D Apache Combat Helicopter” by Muhamad Mirza Arrafi (CC BY 4.0).',
   },  exec: {
     key: 'exec', name: 'Twin Heli', sub: 'Medium twin, rescue / VIP', kind: 'heli', build: () => buildExec(CFG.livery), liveries: [['rescue', 'Rescue'], ['exec', 'Executive']],
     twin: true, retract: true, canopy: true, landLight: [3.6, -0.9, 0],
@@ -8196,6 +8341,7 @@ function fireStore(kind) {
     if (hasR && RADAR.locked && (rd > 3500 || !(SEEK.locked && hasM))) return fireAmraam();
     if (!hasM && hasR) return fireAmraam();
   }
+  if (a.ah64) return kind === 'm' ? fireHellfire() : kind === 'b' ? fireRockets() : undefined;   // Apache: Hellfires and Hydra rockets
   if (kind === 'n' && !S.n) return;
   const list = kind === 'm' ? S.m : kind === 'n' ? S.n : S.b, i = list.length === 2 && list[0] && list[1] ? (S.side ^= 1) : list.indexOf(true);
   if (i < 0) { ui.toast(kind === 'm' ? 'NO MISSILES' : kind === 'n' ? 'NO NUCLEAR WEAPON' : 'NO BOMBS', 'Land, stop, and REARM in SYS'); return; }
@@ -8229,6 +8375,7 @@ function fireAmraam() {
 }
 function rearm() {
   if (SIM.st.rkt) { SIM.st.rkt.prop = B2RKT.BURN; SIM.st.rkt.on = false; }   // refill the B-2's rocket propellant too
+  if (SIM.st.acd.ah64 && SIM.st.onGround && SIM.st.tas < 2) SIM.st.rockets = AH64.RKT;
   const st = SIM.st;
   if (!st.stores) return;
   if (!st.onGround || st.tas > 2) { ui.toast('REARM', 'Stop on the ground first'); return; }
@@ -8267,9 +8414,10 @@ function stepWeapons(dt) {
     const sp = V3.len(pr.v), dir = sp > 1 ? V3.mul(pr.v, 1 / sp) : Q.rot(pr.q, [1, 0, 0]);
     if (pr.guided) stepGuidedNuke(pr, dt, dir);
     else if (pr.kind === 'm') {
-      const boostT = pr.sam ? 6.5 : pr.amraam ? 6.8 : 3.6;   // ship-launched SAMs and AMRAAMs burn longer and fly farther
+      const boostT = pr.sam ? 6.5 : pr.amraam ? 6.8 : pr.hf ? 2.6 : 3.6;   // ship-launched SAMs and AMRAAMs burn longer and fly farther; Hellfire: ~Mach 1.3
       const ign = pr.amraam ? 0.35 : 0.3;
-      if (pr.t > ign && pr.t < boostT) pr.v = V3.add(pr.v, V3.mul(dir, (pr.sam ? 150 : pr.amraam ? 165 : 190) * dt));
+      if (pr.t > ign && pr.t < boostT) pr.v = V3.add(pr.v, V3.mul(dir, (pr.sam ? 150 : pr.amraam ? 165 : pr.hf ? 150 : 190) * dt));
+      if (pr.hf && !pr.target && pr.aimP && pr.t > 0.4) { const r = V3.norm(V3.sub(pr.aimP, pr.p)); pr.v = V3.mul(V3.norm(V3.add(pr.v, V3.mul(V3.sub(r, dir), V3.len(pr.v) * Math.min(1, dt * 3)))), V3.len(pr.v)); }   // no lock: flies down the line of sight
       if (pr.amraam && pr.t < ign) { const st = SIM.st; pr.v = V3.add(pr.v, V3.mul(V3.sub(st.vel, pr.v), Math.min(1, dt * 1.5))); }   // falls clear in the jet's airflow before the motor lights
       // proportional navigation (N = 4) toward the target, up to ~35 g; the seeker looks ±55° off the nose
       if (pr.t > (pr.sam ? 1.3 : pr.amraam ? 0.7 : 0.4) && (pr.target || pr.amraam)) {
@@ -8278,7 +8426,7 @@ function stepWeapons(dt) {
       if (pr.t > (pr.sam ? 1.3 : pr.amraam ? 0.7 : 0.4) && pr.target) {
         const tp = V3.add(pr.target.p, [0, pr.target.hdg !== undefined || pr.target === PLAYER_TGT || pr.target.kind === 'flare' ? 0 : 1.2, 0]);
         const r = V3.sub(tp, pr.p), L = V3.len(r), rh = V3.mul(r, 1 / Math.max(L, 1));
-        if (pr.target.dead || (!pr.sam && V3.dot(rh, dir) < Math.cos(0.96))) {   // ship SAMs are command-guided by the ship's radar   // lost it: look for the hottest thing ahead (flares are very hot)
+        if (pr.target.dead || (!pr.sam && !pr.hf && V3.dot(rh, dir) < Math.cos(0.96))) {   // ship SAMs are command-guided by the ship's radar   // lost it: look for the hottest thing ahead (flares are very hot)
           if (pr.amraam) pr.target = radarScan(pr.p, dir, 0.6, 15000, radarTargets());   // active radar: flares don't fool it
           else { const pool = pr.sam ? [PLAYER_TGT] : pr.enemy ? [PLAYER_TGT].concat(AI.flares) : seekerTargets().concat(AI.flares);
           pr.target = seekScan(pr.p, dir, 0.5, pool); }
@@ -8294,8 +8442,13 @@ function stepWeapons(dt) {
       pr.v = V3.mul(pr.v, Math.exp(-dt * (pr.t < boostT ? 0.015 : pr.sam ? 0.045 : pr.amraam ? 0.028 * Math.exp(-Math.max(0, pr.p[1]) / 8500) : 0.08)));   // AMRAAM drag thins with altitude
       if (pr.t > ign) { pr.trail -= dt; if (pr.trail <= 0) { pr.trail = 0.016; spawnFx('mtrail', V3.sub(pr.p, V3.mul(dir, 1.6)), V3.mul(dir, -8)); if (pr.t < boostT) spawnFx('flame', V3.sub(pr.p, V3.mul(dir, 1.5)), V3.add(pr.v, V3.mul(dir, -40))); } }
     } else {
+      if (pr.kind === 'k') {   // Hydra 70: the motor burns ~1.1 s to about 740 m/s, then it's ballistic
+        if (pr.t < 1.1) { pr.v = V3.add(pr.v, V3.mul(dir, 640 * dt)); pr.trail -= dt; if (pr.trail <= 0) { pr.trail = 0.02; spawnFx('mtrail', V3.sub(pr.p, V3.mul(dir, 0.8)), V3.mul(dir, -6)); spawnFx('flame', V3.sub(pr.p, V3.mul(dir, 0.8)), V3.add(pr.v, V3.mul(dir, -30))); } }
+        pr.v[1] -= GRAV * dt; pr.v = V3.sub(pr.v, V3.mul(pr.v, 0.0002 * sp * dt));
+      } else {
       pr.v[1] -= GRAV * dt;
       pr.v = V3.sub(pr.v, V3.mul(pr.v, 0.00045 * sp * dt));
+      }
     }
     pr.p = V3.add(pr.p, V3.mul(pr.v, dt));
     // orientation follows the velocity
@@ -8331,10 +8484,10 @@ function detonate(pr, sfc) {
     return;
   }
   if (WCAM.pr === pr) { WCAM.boom = pr.p.slice(); WCAM.nk = null; WCAM.hold = 2.4; WCAM.pr = null; }
-  const power = pr.kind === 'b' ? 1.0 : 0.55, p = [pr.p[0], Math.max(pr.p[1], sfc.h), pr.p[2]];
+  const power = pr.kind === 'b' ? 1.0 : pr.kind === 'k' ? 0.3 : 0.55, p = [pr.p[0], Math.max(pr.p[1], sfc.h), pr.p[2]];
   explode(p, power, sfc.water);
   if (pr.kind === 'm' && pr.target && pr.target.kind === 'flare' && V3.len(V3.sub(pr.p, pr.target.p)) < 14) impactCam(p, null, 'flare');   // decoyed: watch it take the flare
-  const R = pr.kind === 'b' ? 38 : pr.sam ? 22 : 16;
+  const R = pr.kind === 'b' ? 38 : pr.kind === 'k' ? 10 : pr.sam ? 22 : pr.hf ? 18 : 16;
   for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, p)) < R) {
     t.dead = 60; t.burn = 30;
     setTimeout(() => explode(V3.add(t.p, [0, 1, 0]), 0.35, false), 300 + Math.random() * 900);
@@ -10401,7 +10554,7 @@ function deckHook(k, mdl) { if (!HOOKS[k] || !mdl || mdl._hook) return; mdl._hoo
 
 // ---------- cannon ----------
 const GUN = { rounds: [], acc: 0, evT: 0 };
-const GUNS = { f22: { p: [4.6, 0.55, 1.05], ammo: 480 }, f35: { p: [3.2, 0.7, -0.95], ammo: 182 }, jet: { p: [1.6, -0.55, 0], ammo: 300 } };   // muzzle (body frame), rounds
+const GUNS = { ah64: { p: [3.5, -0.75, 0], ammo: 1200, turret: true }, f22: { p: [4.6, 0.55, 1.05], ammo: 480 }, f35: { p: [3.2, 0.7, -0.95], ammo: 182 }, jet: { p: [1.6, -0.55, 0], ammo: 300 } };   // muzzle (body frame), rounds
 const GUN_V = 1030;   // muzzle velocity, m/s
 function gunFor(a) { return GUNS[a.key]; }
 function segDist(a, b, p) { const ab = V3.sub(b, a), t = clamp(V3.dot(V3.sub(p, a), ab) / Math.max(V3.dot(ab, ab), 1e-6), 0, 1); return V3.len(V3.sub(V3.add(a, V3.mul(ab, t)), p)); }
@@ -10415,7 +10568,16 @@ function aiGunHit(ai, by, hp) {
 }
 function stepGun(dt) {
   const st = SIM.st, a = st.acd, g = gunFor(a);
-  if (g && st.gunOn && !st.crashed && !st.ej && st.airborne && (st.ammo > 0 || CFG.unlimitedWpn)) {
+  if (a.ah64 && !st.crashed) ah64StepTurret(st, dt);   // the Apache's turret follows your sight all the time
+  if (g && g.turret && st.gunOn && !st.crashed && (st.ammo > 0 || CFG.unlimitedWpn)) {   // M230: 625 rounds a minute, each one drawn
+    GUN.acc += dt * AH64.RATE;
+    const mz = ah64Muzzle(st), d0 = ah64GunDir(st);
+    while (GUN.acc >= 1) { GUN.acc--; if (!CFG.unlimitedWpn) st.ammo = Math.max(0, st.ammo - 1);
+      const d = V3.norm(V3.add(d0, [(Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004]));
+      GUN.rounds.push({ p: mz.slice(), v: V3.add(st.vel, V3.mul(d, AH64.GUN_V)), t: Math.random() * 0.02, own: true, he: true });
+      spawnFx('flash', mz, st.vel, 0.6); SIM.ev.push({ t: 'gun', v: 1 }); }
+    SIM.shake = Math.max(SIM.shake, 0.12);
+  } else if (g && !g.turret && st.gunOn && !st.crashed && !st.ej && st.airborne && (st.ammo > 0 || CFG.unlimitedWpn)) {
     GUN.acc += dt * 25;   // 25 tracers a second, each standing for four rounds of a 6000 rpm cannon
     const f = Q.rot(st.q, [1, 0, 0]), mz = V3.add(st.pos, Q.rot(st.q, g.p));
     while (GUN.acc >= 1) { GUN.acc--; if (!CFG.unlimitedWpn) st.ammo = Math.max(0, st.ammo - 4);
@@ -10442,7 +10604,8 @@ function stepGun(dt) {
       if (st2.gunHits === 3) ui.toast('TAKING HITS', 'Break hard and get out of his gun line');
       if (st2.gunHits >= 9) destroy('Shot down by gunfire');
     }
-    if (r.t < 90) { const sf = surfaceAt(r.p[0], r.p[2]); if (r.p[1] <= sf.h) { r.t = 99; spawnFx(sf.water ? 'spray' : 'dust', [r.p[0], sf.h + 0.5, r.p[2]], [0, sf.water ? 9 : 4, 0], sf.water ? 1 : 0.8); } }
+    if (r.t < 90) { const sf = surfaceAt(r.p[0], r.p[2]); if (r.p[1] <= sf.h) { r.t = 99; spawnFx(sf.water ? 'spray' : 'dust', [r.p[0], sf.h + 0.5, r.p[2]], [0, sf.water ? 9 : 4, 0], sf.water ? 1 : 0.8);
+      if (r.he) { spawnFx('flash', [r.p[0], sf.h + 0.6, r.p[2]], [0, 0, 0], 0.9); spawnFx('dust', [r.p[0], sf.h + 0.8, r.p[2]], [0, 6, 0], 1.2); for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 5) { t.gh = (t.gh || 0) + 1; if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); ui.toast('TARGET HIT', 'Destroyed by 30 mm'); } } } } }   // 30 mm HEDP bursts on impact
   }
   GUN.rounds = GUN.rounds.filter(r => r.t < 2.6);
 }
@@ -10593,7 +10756,7 @@ function ejCamera(dt) {
 }
 
 // ---------- hooks ----------
-function combatReset() { GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.ej = null; st.gunOn = false; if (st.acd.b2) b2defReset(st); else st.def = null; if (!EJ.mesh) ejBuildMeshes(); }
+function combatReset() { GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.rockets = st.acd.ah64 ? AH64.RKT : 0; st.gunAz = st.gunEl = 0; st.ej = null; st.gunOn = false; if (st.acd.b2) b2defReset(st); else st.def = null; if (!EJ.mesh) ejBuildMeshes(); }
 function stepCombat(dt) { stepB2Def(dt); stepGun(dt); stepWaves(dt); stepSams(dt); stepEject(dt); }
 function drawCombat() {
   drawB2Def();
@@ -11702,7 +11865,7 @@ const gl = initGL(cvs);
 const CFG = { ac: 'trainer', ap: 'MIA', start: 'runway', time: 'noon', wind: 'calm', windFrom: 270, crashes: true, infFuel: false, assist: true, invert: false, tilt: false, traffic: true, intercept: true, navy: true, wpnCam: true, impactCam: true, unlimitedWpn: true, sound: true, load: 'normal', fuelPct: 80, failures: false, quality: 'auto', livery: 'rescue' };
 try { Object.assign(CFG, JSON.parse(localStorage.getItem('skytrainer-mk8') || '{}')); } catch (e) {}
 // ---- aircraft data loads on demand: only the aircraft you fly (plus the traffic) is in memory, not all of them ----
-const AC_DATA = { f22: ['f22data.js'], f35: ['f35data.js'], sr71: ['srdata.js'], b2: ['b2data.js'] };
+const AC_DATA = { f22: ['f22data.js'], f35: ['f35data.js'], sr71: ['srdata.js'], b2: ['b2data.js'], ah64: ['ah64data.js'] };
 const DLOAD = {};
 function loadData(f) {
   if (DLOAD[f]) return DLOAD[f];
@@ -11851,6 +12014,7 @@ function init() {
   buildRange();
   (window.__tm = window.__tm || []).push(['buildRange();', performance.now() | 0]);
   G.wpn = { m: (() => { const b = new MB(); mslMesh(b, [0, 0, 0]); return b.build(); })(), b: (() => { const b = new MB(); bombMesh(b, [0, 0, 0]); return b.build(); })(), n: (() => { const b = new MB(); nukeMesh(b, [0, 0, 0]); return b.build(); })(), ng: (() => { const b = new MB(); gnukeMesh(b, [0, 0, 0]); return b.build(); })() };
+  G.wpn.k = (() => { const b = new MB(); b.cyl([-0.7, 0, 0], [0.6, 0, 0], 0.035, 0.035, 8, [0.85, 0.85, 0.8]); b.cyl([0.6, 0, 0], [0.75, 0, 0], 0.035, 0.005, 8, [0.9, 0.85, 0.3]); return b.build(); })();   // Hydra 70 rocket
   G.disc = (() => { const b = new MB(); b.cyl([0, 0, 0], [0, 0.02, 0], 1, 1, 28, [1, 1, 1]); return b.build(); })();
   G.papi = (() => { const m = new MB(); m.box([0, 0, 0], [2.2, 1.2, 2.2], [1, 1, 1]); return m.build(); })();
   // aircraft models are built the first time they're needed (and only once their data has arrived)
@@ -13461,7 +13625,7 @@ function drawJetHUD(VP) {
   const W = innerWidth, H = innerHeight, dpr = Math.min(2, devicePixelRatio || 1);
   if (hudc.width !== Math.round(W * dpr)) { hudc.width = Math.round(W * dpr); hudc.height = Math.round(H * dpr); }
   const g = hudc.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
-  const cues = drawWeaponCues(g, VP, W, H) | rocketCues(g, VP, W, H) | missionCues(g, VP, W, H) | drawRain(g, VP, W, H) | drawNukeAfter(g, VP, W, H);
+  const cues = apacheCues(g, VP, W, H) | drawWeaponCues(g, VP, W, H) | rocketCues(g, VP, W, H) | missionCues(g, VP, W, H) | drawRain(g, VP, W, H) | drawNukeAfter(g, VP, W, H);
   hudc.style.display = show || cues ? 'block' : 'none';
   if (!show) return;
   const proj = d => { const p = V3.add(cam.eye, V3.mul(d, 1000)), v = [0, 0, 0, 0]; for (let r = 0; r < 4; r++) v[r] = VP[r] * p[0] + VP[4 + r] * p[1] + VP[8 + r] * p[2] + VP[12 + r]; return v[3] > 0 ? [(v[0] / v[3] * 0.5 + 0.5) * W, (0.5 - v[1] / v[3] * 0.5) * H] : null; };
@@ -13543,9 +13707,9 @@ function updWpn() {
   const S = SIM.st && SIM.st.stores;
   $('wpn').style.display = S && appState !== 'menu' ? 'flex' : 'none';
   if (!S) return;
-  $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.r ? S.r.filter(Boolean).length + '+' + S.m.filter(Boolean).length : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : S.b.filter(Boolean).length;
+  $('bMslV').textContent = CFG.unlimitedWpn ? '∞' : S.r ? S.r.filter(Boolean).length + '+' + S.m.filter(Boolean).length : S.m.filter(Boolean).length; $('bBombV').textContent = CFG.unlimitedWpn ? '∞' : SIM.st.acd.ah64 ? (SIM.st.rockets || 0) : S.b.filter(Boolean).length;
   $('bMsl').style.display = S.m.length ? '' : 'none';
-  $('bBomb').style.display = S.lo === 'aa' ? 'none' : '';
+  $('bBomb').style.display = S.lo === 'aa' || (!S.b.length && !SIM.st.acd.ah64) ? 'none' : '';
   $('bRkt').style.display = SIM.st.acd.b2 ? '' : 'none'; if (SIM.st.acd.b2) { const R = SIM.st.rkt; $('bRktV').textContent = R ? (R.prop > 0 ? Math.ceil(R.prop) + 's' : 'EMPTY') : '120s'; $('bRkt').classList.toggle('armed', !!(R && R.on)); }
   $('bDef').style.display = SIM.st.def ? '' : 'none'; if (SIM.st.def) { $('bDefV').textContent = SIM.st.def.arm ? 'AUTO' : 'HOLD'; $('bDef').classList.toggle('armed', !!SIM.st.def.arm); }
   $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) ? '' : 'none';
