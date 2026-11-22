@@ -5125,27 +5125,34 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
     py += st.engine ? (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK * 0.9 : 0; py += w[1] * 1.5;
   } else if (SIM.opt.assist) {
     const hover = V < 9;
-    // rate command / attitude hold (the scheme fly-by-wire aircraft use):
-    //  · stick moves = the aircraft rotates at a rate set by how far you push (up to 60°/s pitch, 100°/s roll), with a soft
-    //    centre so small inputs are fine. Hold it and it keeps going round: loops, rolls, wingovers
-    //  · let go in normal flight and it holds that attitude (wings level if you were under 60° of bank); in the hover it
-    //    holds the hover and kills drift. Let go upside down or nose-high and it rolls upright the short way and levels the nose
+    // DASE, as in the real AH-64D. Stick movement commands a rotation rate (the way a SAS-damped helicopter responds to cyclic),
+    // capped at what the Apache really does: ~30°/s in pitch, ~50°/s in roll, with a soft centre for fine control.
+    // Let go and the Digital Automatic Stabilization Equipment takes over:
+    //  · rate damping stops the rotation; once the rates have settled, attitude hold locks the attitude you're in
+    //  · bank under ~7° is rolled level, more than that is held (the real attitude hold holds bank too)
+    //  · below ~5 kt hover hold keeps you over the spot; heading hold in the hover, turn coordination at speed
+    //  · outside ±60° bank / ±45° pitch the holds drop out and only the damping remains, as in the real aircraft
     const ex = x => Math.sign(x) * (0.35 * Math.abs(x) + 0.65 * Math.pow(Math.abs(x), 1.8));
     const pT0 = Math.abs(c.pitchT) >= 0.05, rT0 = Math.abs(c.rollT) >= 0.05;
-    const normal = Math.abs(rollAng) < 1.05 && Math.abs(pitchAng) < 0.75;
-    if (st.holdP === undefined) st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.3);
+    const inEnv = Math.abs(rollAng) < 1.05 && Math.abs(pitchAng) < 0.78;
+    if (st.holdP === undefined) { st.holdP = hover ? 0 : clamp(pitchAng, -0.4, 0.35); st.holdR = 0; st.pLock = true; st.rLock = true; }
+    // capture: track the attitude until the rates have settled, then lock it
+    if (!pT0) st.pLock0 = undefined;
+    if (pT0) { if (st.pLock0 === undefined) st.pLock0 = hover ? 0 : st.holdP; st.pLock = false; st.pSet = 0; }
+    else if (!st.pLock) { st.pSet = Math.abs(w[2]) < 0.06 ? (st.pSet || 0) + dt : 0; st.holdP = hover ? 0 : clamp(pitchAng, -0.4, 0.35); if (st.pSet > 0.3 || hover) st.pLock = true; }
+    if (rT0) { st.rLock = false; st.rSet = 0; }
+    else if (!st.rLock) { st.rSet = Math.abs(w[0]) < 0.08 ? (st.rSet || 0) + dt : 0; st.holdR = Math.abs(rollAng) < 0.12 ? 0 : clamp(rollAng, -1.0, 1.0); if (st.rSet > 0.3) st.rLock = true; }
+    if (hover && !pT0) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.03 + st.hiX, -0.09, 0.09) - st.holdP) * Math.min(1, dt * 2); }
     let qd, pd;   // wanted pitch and roll rates, rad/s
-    if (pT0) { st.pTouch = true; qd = ex(c.pitch) * 1.2; }
+    // pitch: part stick = a nose attitude relative to trim (cyclic position ~ airspeed, like a real speed-stable helicopter);
+    // the last bit of travel keeps it rotating, for loops and big pull-ups
+    if (pT0) qd = Math.abs(c.pitch) > 0.88 ? Math.sign(c.pitch) * 0.55 : clamp(((st.pLock0 ?? st.holdP) + ex(c.pitch) * 0.62 - pitchAng) * 2.2, -0.55, 0.55);
+    else qd = st.pLock && inEnv ? clamp((st.holdP - pitchAng) * 2.2, -0.45, 0.45) : 0;
+    if (rT0) pd = ex(c.roll) * 0.9;
     else {
-      if (st.pTouch) { st.pTouch = false; st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.3); }
-      if (hover) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.03 + st.hiX, -0.09, 0.09) - st.holdP) * Math.min(1, dt * 2); }
-      qd = normal ? clamp((st.holdP - pitchAng) * 2.2, -0.7, 0.7) : !rT0 && Math.abs(rollAng) < 1.4 ? clamp(-pitchAng * 1.5, -0.8, 0.8) : 0;   // past the envelope: bring the nose back to the horizon once upright
-    }
-    if (rT0) pd = ex(c.roll) * 1.75;
-    else {
-      let rT = 0;
+      let rT = st.holdR;
       if (hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.05, 0.05); rT = clamp(-vgb[2] * 0.03 + st.hiZ, -0.09, 0.09); }
-      pd = normal ? clamp((rT - rollAng) * 2.6, -1.2, 1.2) : pT0 ? 0 : clamp(-rollAng * 2.2, -1.6, 1.6);   // mid-loop with the pitch stick held: leave the roll alone   // let go upside down and it rolls upright the short way
+      pd = (st.rLock || hover) && Math.abs(rollAng) < 1.05 && Math.abs(pitchAng) < 1.4 ? clamp((rT - rollAng) * 2.4, -0.8, 0.8) : 0;   // wings held level even through a steep pull-up
     }
     // inner rate loop with an integrator (trims out steady moments: rotor damping, stabilator, tail rotor), plus blowback feed-forward
     const eq = qd - w[2], epr = pd - w[0];
@@ -5171,6 +5178,16 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   const lam = lc + li;
   const z = Math.max(agl + 2.0, 0.55 * R.R), kge = Math.min(1.18, 1 / (1 - Math.pow(R.R / (4 * z), 2) / (1 + Math.pow(mu / Math.max(Math.abs(lam), 0.01), 2))));
   let T = rho * R.A * OR * OR * CT * kge * rotorOK * (1 - 0.04 * Math.exp(-mu / 0.05));   // a little lost to downwash on the fuselage and stub wings in the hover
+  // blade stall: the blades can only lift so much (thrust coefficient / solidity ~0.2 static, less at high advance ratio).
+  // Pull past it and the rotor stops giving more thrust, shakes, and the retreating (left) side lets go: nose up, roll left
+  const ctsMax = 0.2 - 0.25 * mu * mu, cts = CT / R.SIG;
+  let stall = cts > ctsMax ? Math.min(1, (cts - ctsMax) / 0.05) : 0;
+  // retreating-blade stall approaching Vne (197 kt, advance ratio ~0.45): vibration builds from ~170 kt
+  const rbs = clamp((mu - 0.38) / 0.08, 0, 1.5) * (CT > 0.004 ? 1 : 0.5);
+  stall = Math.max(stall, rbs * 0.7);
+  if (cts > ctsMax) T = rho * R.A * OR * OR * R.SIG * ctsMax * kge * rotorOK;
+  if (stall > 0 && rotorOK) { M[2] += 26000 * stall; M[0] -= 22000 * stall; SIM.shake = Math.max(SIM.shake || 0, 0.35 * stall); }
+  st.bstall = stall;
   // vortex ring: sinking at 35-160% of the hover induced velocity with almost no airspeed
   const vh = Math.sqrt(Math.max(T, 1) / (2 * rho * R.A)), desc = -vn, vinS = V3.len(vin);
   const vrs = rotorOK ? clamp((desc - 0.35 * vh) / (0.3 * vh), 0, 1) * clamp((1.6 * vh - desc) / (0.5 * vh), 0, 1) * clamp((0.9 * vh - vinS) / (0.4 * vh), 0, 1) : 0;
@@ -6385,6 +6402,7 @@ const AC = {
       { p: [5.1, -0.6, 0], piece: 'fuse', kind: 'fuse', n: 'Nose' }, { p: [2.4, -1.2, 0], piece: 'fuse', kind: 'fuse', n: 'Gun turret' },
       { p: [-1.5, -1.0, 0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.5, -1.0, -0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' },
       { p: [-0.3, -0.35, 2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }, { p: [-0.3, -0.35, -2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }],
+    limits: { vne: 197, vfe: [0], gMax: 3.5, gMin: -0.5 },   /* AH-64D: Vne 197 kt, +3.5 / -0.5 g */
     collapse: 5.2, camDist: 24, airSpawn: 35, airThr: 0.44,   /* crashworthy gear: takes a ~1,000 fpm arrival; past that it strokes and breaks */
     tips: 'Collective (left slider) to about 45% to hover; the TORQUE gauge shows how much of the engines you are using: past 100% the rotor droops. Push the cyclic to tilt the rotor and fly forward; pedals work the tail rotor. Feel the shudder through translational lift at 15 kt, and never sink fast with no airspeed: that is the vortex ring. GUN fires the 30 mm cannon: in the cockpit it points where you look, from outside it follows the nose, and the sight snaps onto a target near the crosshair (green box). MSL fires a Hellfire at the boxed target; BOMB fires a pair of Hydra rockets straight ahead.',
     help: 'The AH-64D Apache Longbow: two General Electric T700-GE-701C turboshafts of 1,890 shp, a 14.6 m four-blade main rotor, a four-blade tail rotor set in a non-orthogonal X, and the Longbow fire-control radar on top of the mast. Never-exceed 197 kt, cruise about 143 kt, climb about 2,500 ft/min, ceiling 21,000 ft. The M230 chain gun under the nose fires 30 mm rounds at 625 a minute from a 1,200-round magazine; in the real helicopter it belongs to the front-seat co-pilot/gunner, here you fly and fight. 8 AGM-114 Hellfires on the inner pylons, two 19-shot Hydra 70 rocket pods outside. 3D model: “Boeing AH-64D Apache Combat Helicopter” by Muhamad Mirza Arrafi (CC BY 4.0).',
@@ -13117,6 +13135,7 @@ function updateHUD(dt) {
   if (a.kind === 'heli' && st.airborne && st.rpm < 0.85) w.push('LOW ROTOR RPM — COLLECTIVE DOWN');
   if (a.ah64 && st.airborne && (st.torque || 0) > 0.98) w.push('TORQUE LIMIT — ROTOR DROOPING');
   if (a.ah64 && st.vrs > 0.3) w.push('VORTEX RING — FORWARD CYCLIC TO FLY OUT');
+  if (a.ah64 && st.bstall > 0.25) w.push(st.tas * 1.944 > 165 ? 'RETREATING BLADE STALL — SLOW DOWN' : 'BLADE STALL — EASE THE PULL');
   if (a.piston && st.cht > 235) w.push('ENGINE HOT');
   if (a.piston && st.carbIce > 0.3 && !c.carbHeat) w.push('ROUGH ENGINE — CARB ICE?');
   if (a.hyper && st.skinT > 1420) w.push('SKIN OVERHEAT');
