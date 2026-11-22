@@ -4966,23 +4966,35 @@ const O3 = [0, 0, 0];
 const AH64 = { GUN_V: 805, RATE: 625 / 60, AZ: 110 * D2R, EL_UP: 11 * D2R, EL_DN: 60 * D2R, BARREL: 1.95, RKT: 38 };
 function buildAH64() {
   const D = AH64D, M = D.meta, parts = [], texs = D.tex.map(t => loadTex(t));
+  texs.mapsFor = D.maps.map((m, i) => i === 3 ? null : [loadTex(m[0]), loadTex(m[1])]);   // normal + roughness/cavity maps built from the paint's own panel lines; glass stays glass
   const Z = () => 0, O = [0, 0, 0], Y = [0, 1, 0], S = s => s.st || {};
   const add = (group, piece, pivot, axis, angle, opts = {}) => { for (const mb of b7meshes(group, texs, () => 0, D)) parts.push(part(mb, pivot, axis, angle, { piece, ...opts })); };
   add('body', 'fuse', O, Y, Z, { twoSided: true }); add('gear', 'gear', O, Y, Z);
   // main rotor: blades and hub turn on the mast; cyclic tilts the disc
-  const H = M.hub, cyc = [{ pivot: H, axis: [0, 0, 1], angle: s => clamp(s.pitch, -1, 1) * 0.06 }, { pivot: H, axis: [1, 0, 0], angle: s => clamp(s.roll, -1, 1) * 0.06 }];
+  const H = M.hub, cyc = [{ pivot: H, axis: [0, 0, 1], angle: s => clamp(s.pitch, -1, 1) * 0.07 + ((S(s).tp || 0) - (S(s).cyc ? S(s).cyc[0] * AHR.CYCP : 0)) * 0.8 },
+    { pivot: H, axis: [1, 0, 0], angle: s => clamp(s.roll, -1, 1) * 0.06 + ((S(s).tr || 0) - (S(s).cyc ? S(s).cyc[1] * AHR.CYCR : 0)) * 0.8 }];   // swashplate from the stick, plus the flapping the air adds   // the disc tilts as the physics tilts it
   add('rotor', 'rotor', H, Y, s => -s.prop, { outer: cyc, twoSided: true });
   add('hub', 'rotor', H, Y, s => -s.prop, { outer: cyc, twoSided: true });
-  { const m = AMB(); m.cyl([H[0], H[1] - 0.02, 0], [H[0], H[1] + 0.02, 0], 7.3, 7.3, 28, [0.12, 0.12, 0.1]);
-    parts.push(part(m, H, Y, Z, { piece: 'rotor', outer: cyc, alpha: s => s.rpm > 0.35 ? 0.12 * Math.min(1, s.rpm) : 0, twoSided: true })); }
+  { const m = AMB(); m.cyl([H[0], H[1] - 0.02, 0], [H[0], H[1] + 0.02, 0], 7.3, 7.3, 40, [0.03, 0.035, 0.03]);
+    parts.push(part(m, H, Y, Z, { piece: 'rotor', outer: cyc, alpha: s => s.rpm > 0.35 ? 0.16 * Math.min(1, s.rpm) : 0, twoSided: true, unlit: 1 })); }
   // tail rotor: on the left of the fin, axis across the aircraft, 4.7 x main rotor speed
   add('trotor', 'boom', M.tr, [0, 0, 1], s => s.prop * 4.7, { twoSided: true });
-  { const m = AMB(); m.cyl([M.tr[0], M.tr[1], M.tr[2] - 0.02], [M.tr[0], M.tr[1], M.tr[2] + 0.02], 1.4, 1.4, 16, [0.12, 0.12, 0.1]);
-    parts.push(part(m, M.tr, [0, 0, 1], Z, { piece: 'boom', alpha: s => s.rpm > 0.35 ? 0.1 : 0, twoSided: true })); }
+  { const m = AMB(); m.cyl([M.tr[0], M.tr[1], M.tr[2] - 0.02], [M.tr[0], M.tr[1], M.tr[2] + 0.02], 1.4, 1.4, 20, [0.03, 0.035, 0.03]);
+    parts.push(part(m, M.tr, [0, 0, 1], Z, { piece: 'boom', alpha: s => s.rpm > 0.35 ? 0.13 : 0, twoSided: true, unlit: 1 })); }
   // M230 turret: azimuth about its vertical axis, the gun elevates on its trunnion
   add('gun', 'fuse', M.gunEl, [0, 0, 1], s => S(s).gunEl || 0, { outer: { pivot: M.gunAz, axis: Y, angle: s => S(s).gunAz || 0 } });
   // Hellfires: each one disappears from its rail when fired
   for (let k = 0; k < 8; k++) add('hf' + k, 'fuse', O, Y, Z, { show: s => { const st = S(s); return !st.stores || !st.stores.m || st.stores.m[k] !== false; } });
+  // rear (pilot's) cockpit: the model has no interior, so give the pilot a panel, glareshield, side consoles and two lit MFDs
+  { const m = AMB(), g = [0.07, 0.075, 0.08], g2 = [0.11, 0.115, 0.12];
+    m.box([2.07, 1.02, 0], [0.12, 0.44, 0.8], g); m.box([1.99, 1.27, 0], [0.32, 0.05, 0.84], [0.05, 0.05, 0.055]);
+    for (const z of [-0.43, 0.43]) m.box([1.45, 0.98, z], [0.8, 0.1, 0.17], g2);
+    m.box([0.98, 1.05, 0], [0.12, 0.7, 0.62], [0.09, 0.09, 0.08]);   // seat back
+    m.box([1.9, 0.78, 0], [0.08, 0.36, 0.08], [0.04, 0.04, 0.04]);   // cyclic
+    parts.push(part(m, O, Y, Z, { piece: 'fuse', show: s => s.inside, twoSided: true }));
+    const d = AMB(), sc = (zc, col) => { const x = 2.0, y0 = 0.94, y1 = 1.16, z0 = zc - 0.11, z1 = zc + 0.11; d.quad([x, y0, z0], [x, y1, z0], [x, y1, z1], [x, y0, z1], col); };
+    sc(-0.21, [0.1, 0.42, 0.16]); sc(0.21, [0.12, 0.3, 0.42]); sc(0, [0.02, 0.06, 0.03]);
+    parts.push(part(d, O, Y, Z, { piece: 'fuse', show: s => s.inside, twoSided: true, unlit: 1 })); }
   // canopy: tinted, see-through from inside
   add('canopy', 'fuse', O, Y, Z, { twoSided: true, alpha: s => s.inside ? 0.12 : 0.9 });
   const piece = (groups, mass) => {
@@ -5077,6 +5089,197 @@ function apacheCues(g, VP, W, H) {
   g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 14, H - 92);
   g.restore();
   return true;
+}
+
+// ===================== AH-64D rotor physics =====================
+// Blade-element / momentum-theory rotor, not a "thrust = collective" lift fan:
+//  · collective sets blade pitch; thrust comes from blade pitch minus the inflow through the disc, solved every step
+//    (so climbing unloads the rotor, descending loads it, translational lift appears as forward speed cleans the inflow,
+//    ground effect cushions the last few metres, and fast vertical descents fall into the vortex ring)
+//  · cyclic tilts the rotor disc; the thrust vector tilts with it and the hub's hinge-offset stiffness pulls the fuselage
+//    round after it. The disc blows back with airspeed (speed stability) and lags pitch/roll rates (rotor damping)
+//  · rotor torque is real power: induced + profile + climb; the two T700s under a governor supply it up to the
+//    transmission limit, and if you pull more than that the rotor droops. Engine off, the inflow turns the rotor: autorotation
+//  · the tail rotor must cancel that torque (pedals), and pushes the whole aircraft sideways (translating tendency)
+//  · stabilator and fin give pitch and weathercock stability at speed; the fin's camber unloads the tail rotor in cruise
+// DASE-style stability augmentation (rate damping + attitude/hover/heading hold) runs on top when ASSIST is on.
+const AHR = { R: 7.315, A: 168.1, OM: 30.3, SIG: 0.0925, CLA: 5.73, CD0: 0.0095, GAM: 8.1, HUB: [0, 2.0, 0], KH: 180000, IR: 5200,
+  PMAX: 2.2e6, TR: [-10.6, 1.9, 0], TR0: 4250, TRK: 9500, ATR: 6.2, TH0: 1.5 * D2R, TH1: 17.5 * D2R, CYCP: 10 * D2R, CYCR: 8 * D2R };
+function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
+  const R = AHR, F = [0, 0, 0], M = [0, 0, 0], w = st.w;
+  if (st.nr === undefined) { st.nr = st.rpm; st.pwr = st.engine && st.rpm > 0.9 ? 1 : 0; st.li = 0.05; st.tp = 0; st.tr = 0; st.hiX = 0; st.hiZ = 0; st.yI = 0; }
+  const rotorOK = L.rotor ? 0 : 1, boomOK = L.boom || st.failed.tailRotor ? 0 : 1;
+  const starting = st.engine && st.starting > 0;
+  if (starting) st.nr = st.rpm;
+  st.pwr = st.engine && !starting ? Math.min(1, st.pwr + dt / 9) : 0;
+  const om = Math.max(0.5, st.nr * R.OM), OR = om * R.R, rr = st.nr * st.nr;
+  // ---- pilot inputs, then the stability augmentation ----
+  let cp = c.pitch, cr = c.roll, py = c.yaw;
+  const vgb = Q.inv(st.q, st.vel);
+  if (SIM.opt.assist) {
+    const hover = V < 9;
+    // attitude command / attitude hold: the stick asks for a pitch and bank angle, the cyclic is worked to give it.
+    // Let go and it holds the attitude you left it in (in the hover, it holds the hover and kills any drift)
+    if (st.holdP === undefined) st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25);
+    if (Math.abs(c.pitchT) < 0.05) {
+      if (st.pTouch) { st.pTouch = false; st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25); }
+      if (hover) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.035 + st.hiX, -0.14, 0.14) - st.holdP) * Math.min(1, dt * 2); }
+    } else if (!st.pTouch) { st.pTouch = true; if (hover) st.holdP = 0; }
+    const pT = clamp(st.holdP + (st.pTouch ? c.pitch * 0.33 : 0), -0.5, 0.4);
+    let rT = Math.abs(c.rollT) < 0.05 ? 0 : c.roll * 0.62;
+    if (Math.abs(c.rollT) < 0.05 && hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.08, 0.08); rT = clamp(-vgb[2] * 0.035 + st.hiZ, -0.14, 0.14); }
+    const ep = pT - pitchAng, er = rT - rollAng;
+    st.pI = clamp((st.pI || 0) + ep * 1.2 * dt, -0.5, 0.5); st.rI = clamp((st.rI || 0) + er * 1.5 * dt, -0.5, 0.5);   // trims out the steady moments (tail-rotor roll, stabilator)
+    if (st.onGround) { st.pI *= 1 - dt * 2; st.rI *= 1 - dt * 2; }
+    cp = clamp(ep * 2.6 + st.pI - w[2] * 1.3, -1.1, 1.1);
+    cr = clamp(er * 2.2 + st.rI - w[0] * 0.65, -1.1, 1.1);
+    // pedals: cancel the change in rotor torque, hold heading when your feet are off, coordinate turns at speed
+    const need = (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK;
+    py += st.engine ? need * 0.9 : 0;
+    if (Math.abs(c.yawT) < 0.05) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 1.4 * Math.min(1, (V - 12) / 15); }
+    else st.yI *= 1 - dt;
+  }
+  cp = clamp(cp, -1.2, 1.2); cr = clamp(cr, -1.2, 1.2); py = clamp(py, -1.6, 1.6);
+  // ---- rotor disc: cyclic + blowback + rate lag, flapping with a short time constant ----
+  const th0 = R.TH0 + clamp(c.thr, 0, 1) * R.TH1;
+  const n0 = [-Math.sin(st.tp) * Math.cos(st.tr), Math.cos(st.tp) * Math.cos(st.tr), Math.sin(st.tr)];
+  const vn = V3.dot(vb, n0), vin = V3.sub(vb, V3.mul(n0, vn)), mu = V3.len(vin) / OR, lc = vn / OR;
+  // inflow: momentum theory, a few damped fixed-point passes from last step's answer
+  let li = st.li, CT = 0;
+  for (let k = 0; k < 5; k++) { const lam = lc + li; CT = R.SIG * R.CLA / 2 * (th0 * (1 / 3 + mu * mu / 2) - lam / 2); const ln = CT / (2 * Math.sqrt(mu * mu + lam * lam + 1e-5)); li = clamp(0.5 * li + 0.5 * ln, 0, 0.2); }
+  st.li = li;
+  const lam = lc + li;
+  const z = Math.max(agl + 2.0, 0.55 * R.R), kge = Math.min(1.18, 1 / (1 - Math.pow(R.R / (4 * z), 2) / (1 + Math.pow(mu / Math.max(Math.abs(lam), 0.01), 2))));
+  let T = rho * R.A * OR * OR * CT * kge * rotorOK * (1 - 0.04 * Math.exp(-mu / 0.05));   // a little lost to downwash on the fuselage and stub wings in the hover
+  // vortex ring: sinking at 35-160% of the hover induced velocity with almost no airspeed
+  const vh = Math.sqrt(Math.max(T, 1) / (2 * rho * R.A)), desc = -vn, vinS = V3.len(vin);
+  const vrs = rotorOK ? clamp((desc - 0.35 * vh) / (0.3 * vh), 0, 1) * clamp((1.6 * vh - desc) / (0.5 * vh), 0, 1) * clamp((0.9 * vh - vinS) / (0.4 * vh), 0, 1) : 0;
+  st.vrs = vrs;
+  if (vrs > 0) { T *= 1 - 0.35 * vrs * (0.7 + 0.6 * Math.random()); M[0] += (Math.random() - 0.5) * 30000 * vrs; M[2] += (Math.random() - 0.5) * 30000 * vrs; SIM.shake = Math.max(SIM.shake || 0, 0.3 * vrs); }
+  if (vinS > 4 && vinS < 11 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, 0.08 * Math.sin((vinS - 4) / 7 * Math.PI));   // the shudder through translational lift
+  // disc tilt targets
+  const kb = clamp(2 * (4 / 3 * th0 - lam) / (1 - mu * mu / 2), -0.4, 0.8), tauF = 16 / (R.GAM * om);
+  let tp = cp * R.CYCP + kb * vin[0] / OR - w[2] * tauF, tr = cr * R.CYCR - kb * vin[2] / OR - w[0] * tauF;
+  tr += 0.035 * Math.exp(-Math.pow((vinS - 8) / 4, 2)) * (vin[0] > 0 ? 1 : 0);   // transverse-flow roll to the right in transition
+  const fl = Math.min(1, dt / 0.05);
+  st.tp = clamp(st.tp + (tp - st.tp) * fl, -0.28, 0.28); st.tr = clamp(st.tr + (tr - st.tr) * fl, -0.24, 0.24);
+  const n = V3.norm([-Math.sin(st.tp) * Math.cos(st.tr), Math.cos(st.tp) * Math.cos(st.tr), Math.sin(st.tr)]);
+  // ---- forces and moments: rotor thrust through the hub, hub stiffness ----
+  const Fr = V3.mul(n, T), H = R.HUB;
+  F[0] += Fr[0]; F[1] += Fr[1]; F[2] += Fr[2];
+  M[0] += H[1] * Fr[2] - H[2] * Fr[1]; M[1] += H[2] * Fr[0] - H[0] * Fr[2]; M[2] += H[0] * Fr[1] - H[1] * Fr[0];
+  M[0] += R.KH * rr * st.tr * rotorOK; M[2] += R.KH * rr * st.tp * rotorOK;
+  // ---- power and rotor speed ----
+  const CQ = CT * (lc + 1.15 * li) + R.SIG * R.CD0 / 8 * (1 + 4.6 * mu * mu);
+  const Pm = rho * R.A * OR * OR * OR * CQ * rotorOK;
+  const Ttr = boomOK * rr * (rho / 1.225) * (R.TR0 - R.TRK * py) - w[1] * 2100 * boomOK;   // yawing changes the tail rotor's inflow: yaw damping
+  const Ptr = Math.pow(Math.abs(Ttr), 1.5) / Math.sqrt(2 * rho * R.ATR) + 30000 * rr * st.nr;
+  const Preq = Pm + Ptr * boomOK + 40000 * rr;
+  const Pav = R.PMAX * Math.pow(rho / 1.225, 0.75) * (st.oei ? 0.64 : 1) * st.pwr;
+  const Peng = st.engine && !starting ? clamp(Preq + 3.3e7 * (1 - st.nr), 0, Pav) : 0;
+  if (!starting) st.nr = clamp(st.nr + (Peng - Preq) / (R.IR * om * R.OM) * dt, 0, 1.15);
+  st.rpm = st.nr; st.torque = Math.max(0, Preq) / R.PMAX; st.qm = Pm / om; st.power = Preq;
+  // main-rotor torque turns the fuselage the other way (nose right; nose left in autorotation)
+  M[1] -= st.qm;
+  // tail rotor: on the left of the fin, pushing the tail right; also pushes the aircraft right (translating tendency)
+  F[2] += Ttr; M[0] += R.TR[1] * Ttr; M[1] += -R.TR[0] * Ttr;
+  // ---- fuselage, stabilator and fin ----
+  F[0] -= 0.5 * rho * a.CDA[0] * V * vb[0]; F[1] -= 0.5 * rho * a.CDA[1] * V * vb[1]; F[2] -= 0.5 * rho * a.CDA[2] * V * vb[2];
+  const q = 0.5 * rho * V * V, fwd = clamp((vb[0] - 6) / 10, 0, 1);
+  if (fwd > 0) {
+    const al = Math.atan2(-vb[1], vb[0]), be = Math.atan2(vb[2], vb[0]);
+    const al0 = -0.13 * clamp((V - 15) / 60, 0, 1);   // the stabilator is scheduled with airspeed so the nose-down cruise attitude is trimmed
+    M[2] += fwd * (-q * 55 * Math.sin(al - al0) - 0.5 * rho * V * 55 * 9.5 * w[2]);   // stabilator
+    M[1] += fwd * (-q * 80 * Math.sin(be) + q * 8 * boomOK - 0.5 * rho * V * 80 * 10.6 * w[1]);   // fin: weathercock, camber, damping
+    F[2] -= fwd * q * 7.5 * Math.sin(be);
+  }
+  st.cyc = [cp, cr]; st.ped = py; st.ttr = Ttr;
+  // rotor wash: the downwash fans out along the ground and kicks up dust, or a ring of spray over water
+  if (T > 15000 && agl < 28 && rotorOK) {
+    const k = (1 - agl / 28) * Math.min(1, T / 70000), n2 = Math.random() < dt * 30 * k * (SIM.fxK || 1) ? 1 + (Math.random() < k ? 1 : 0) : 0;
+    for (let i = 0; i < n2; i++) {
+      const ang = Math.random() * 6.283, rad = R.R * (0.6 + Math.random() * 0.9), x = st.pos[0] + Math.cos(ang) * rad, zz = st.pos[2] + Math.sin(ang) * rad, sf = surfaceAt(x, zz);
+      const v = [Math.cos(ang) * (9 + 9 * k), 0.8 + Math.random() * 2, Math.sin(ang) * (9 + 9 * k)];
+      spawnFx(sf.water ? 'mist' : 'rdust', [x, sf.h + 0.4, zz], v, (sf.water ? 1.2 : 1.0) * (0.5 + k));
+    }
+  }
+  return { F, M, T };
+}
+
+// ---- one 30 mm round leaving the barrel: flash, smoke, the link and case going overboard, the kick ----
+function ah64Shot(st, mz, d) {
+  spawnFx('flash', V3.add(mz, V3.mul(d, 0.6)), st.vel, 1.5);
+  spawnFx('fire', V3.add(mz, V3.mul(d, 0.9)), V3.add(st.vel, V3.mul(d, 25)), 0.9);
+  if (Math.random() < 0.5) spawnFx('tsmoke', V3.add(mz, V3.mul(d, 1.5)), V3.add(V3.mul(st.vel, 0.6), V3.mul(d, 5)), 0.9);   // light grey propellant smoke
+  spawnFx('chunk', V3.add(st.pos, Q.rot(st.q, [2.4, -1.3, 0.2])), V3.add(st.vel, Q.rot(st.q, [0, -4, 3 + Math.random() * 2])), 0.06);
+  SIM.ev.push({ t: 'gun30', v: 1 });
+  // recoil: ~0.4 kg at 805 m/s plus the gas, ten times a second, through the turret 1.3 m under and 2.7 m ahead of the CG
+  const J = 450, m = st.acd.mass + (st.fuel || 0), I = st.acd.I;
+  st.vel = V3.sub(st.vel, V3.mul(d, J / m));
+  const jb = Q.inv(st.q, V3.mul(d, -J)), r = [2.7, -1.3, 0];
+  const L = [r[1] * jb[2] - r[2] * jb[1], r[2] * jb[0] - r[0] * jb[2], r[0] * jb[1] - r[1] * jb[0]];
+  for (let k = 0; k < 3; k++) st.w[k] += L[k] / I[k];
+}
+// ---- a 30 mm HEDP round bursting: flash, a black-grey puff, dirt and fragments ----
+function ah64Burst(p, water, k) {
+  const q = [p[0], p[1] + 0.4, p[2]];
+  spawnFx('flash', q, [0, 0, 0], 2.6 * k);
+  if (water) { spawnFx('spray', q, [0, 14, 0], 1.6 * k); spawnFx('spray', q, [2, 10, 1], 1.2 * k); }
+  else {
+    spawnFx('fire', q, [0, 3, 0], 1.4 * k); spawnFx('dust', q, [0, 7, 0], 2.2 * k); spawnFx('smoke', [q[0], q[1] + 1, q[2]], [0, 2.5, 0], 1.6 * k);
+    for (let i = 0; i < 4; i++) spawnFx('dirt', q, [(Math.random() - 0.5) * 16, 6 + Math.random() * 10, (Math.random() - 0.5) * 16], 0.5);
+  }
+  for (let i = 0; i < 5; i++) spawnFx('spark', q, [(Math.random() - 0.5) * 40, Math.random() * 25, (Math.random() - 0.5) * 40]);
+  const d = V3.len(V3.sub(p, SIM.st.pos));
+  GUN.hitEv = (GUN.hitEv || 0) + 1; if (GUN.hitEv % 2 === 0) SIM.pend.push({ in: d / 343, ev: { t: 'hit30', v: clamp(300 / Math.max(d, 60), 0.08, 1) } });   // sound arrives later than the flash
+}
+
+// ---- IHADSS: the Apache pilot's helmet symbology (flight page), painted on the monocle wherever you look ----
+// heading tape, airspeed, radar altitude with its bar and the rate-of-climb pointer, barometric altitude, engine torque,
+// horizon line, skid ball, and in the hover the velocity vector that shows which way you're drifting
+function apacheIHADSS(g, W, H) {
+  const st = SIM.st, GR = 'rgba(110,255,150,0.95)', cx = W / 2, cy = H * 0.5, s = Math.min(W, H * 1.4) / 700;
+  g.save(); g.strokeStyle = g.fillStyle = GR; g.lineWidth = 1.5; g.font = `600 ${Math.round(15 * s)}px Rajdhani, sans-serif`; g.textBaseline = 'middle';
+  const f = Q.rot(st.q, [1, 0, 0]), hdg = (Math.atan2(f[0], -f[2]) / D2R + 360) % 360;
+  // heading tape
+  const ty = H * 0.13, tw = 260 * s; g.textAlign = 'center';
+  g.save(); g.beginPath(); g.rect(cx - tw / 2, ty - 24 * s, tw, 40 * s); g.clip();
+  for (let d = Math.floor(hdg / 10) * 10 - 40; d <= hdg + 40; d += 10) { const x = cx + (d - hdg) * tw / 80, dd = (d + 360) % 360;
+    g.beginPath(); g.moveTo(x, ty); g.lineTo(x, ty + (dd % 30 ? 5 : 9) * s); g.stroke();
+    if (dd % 30 === 0) g.fillText(dd === 0 ? 'N' : dd === 90 ? 'E' : dd === 180 ? 'S' : dd === 270 ? 'W' : String(dd / 10), x, ty - 10 * s); }
+  g.restore(); g.beginPath(); g.moveTo(cx, ty + 12 * s); g.lineTo(cx - 5 * s, ty + 20 * s); g.lineTo(cx + 5 * s, ty + 20 * s); g.closePath(); g.stroke();
+  g.fillText(String(Math.round(hdg)).padStart(3, '0'), cx, ty + 32 * s);
+  // horizon line, rolling and pitching with the aircraft
+  const ra = st.rollAng || 0, pa = st.pitchAng || 0, ppx = 6 * s / D2R;
+  g.save(); g.translate(cx, cy); g.rotate(-ra); g.beginPath(); const hy = pa * ppx;
+  g.moveTo(-170 * s, hy); g.lineTo(-40 * s, hy); g.moveTo(40 * s, hy); g.lineTo(170 * s, hy); g.stroke(); g.restore();
+  // airspeed (left), torque under it
+  const lx = cx - 190 * s; g.textAlign = 'right';
+  g.font = `700 ${Math.round(22 * s)}px Rajdhani, sans-serif`; g.fillText(String(Math.round(st.ias * KT)), lx, cy);
+  g.font = `600 ${Math.round(15 * s)}px Rajdhani, sans-serif`; g.fillText('KTS', lx, cy + 20 * s);
+  const tq = Math.round((st.torque || 0) * 100); g.fillStyle = tq > 100 ? 'rgba(255,120,90,0.95)' : GR;
+  g.font = `700 ${Math.round(20 * s)}px Rajdhani, sans-serif`; g.fillText(tq + '%', lx, cy + 62 * s); g.fillStyle = GR;
+  g.font = `600 ${Math.round(13 * s)}px Rajdhani, sans-serif`; g.fillText('TQ', lx, cy + 80 * s);
+  // radar altitude: digits + a 0-200 ft bar, rate-of-climb pointer beside it (±1000 ft/min)
+  const rx = cx + 190 * s, agl = Math.max(0, st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h - 1.6) * FT, bh = 150 * s, by = cy + bh / 2;
+  g.textAlign = 'left'; g.font = `700 ${Math.round(22 * s)}px Rajdhani, sans-serif`;
+  if (agl < 1428) g.fillText(String(Math.round(agl > 50 ? agl / 10 : agl) * (agl > 50 ? 10 : 1)), rx + 18 * s, cy);
+  g.font = `600 ${Math.round(14 * s)}px Rajdhani, sans-serif`; g.fillText('BARO ' + Math.round(st.pos[1] * FT / 10) * 10, rx + 18 * s, cy - 92 * s);
+  g.strokeRect(rx, by - bh, 8 * s, bh); g.fillRect(rx, by - bh * Math.min(1, agl / 200), 8 * s, bh * Math.min(1, agl / 200));
+  for (let k = 0; k <= 4; k++) { g.beginPath(); g.moveTo(rx - 4 * s, by - bh * k / 4); g.lineTo(rx, by - bh * k / 4); g.stroke(); }
+  const vsy = cy - clamp(st.vel[1] * 196.85 / 1000, -1, 1) * bh / 2; g.beginPath(); g.moveTo(rx - 6 * s, vsy); g.lineTo(rx - 16 * s, vsy - 5 * s); g.lineTo(rx - 16 * s, vsy + 5 * s); g.closePath(); g.fill();
+  // hover velocity vector: ground speed in the horizontal, from the centre (full circle = 10 kt) — under 40 kt
+  const gs = Math.hypot(st.vel[0], st.vel[2]);
+  if (gs * KT < 40) { const vb = Q.inv(st.q, [st.vel[0], 0, st.vel[2]]), k = 70 * s / (10 / KT);
+    g.beginPath(); g.arc(cx, cy, 70 * s, 0, 7); g.setLineDash([3 * s, 6 * s]); g.stroke(); g.setLineDash([]);
+    g.beginPath(); g.moveTo(cx, cy); g.lineTo(cx + clamp(vb[2] * k, -140 * s, 140 * s), cy - clamp(vb[0] * k, -140 * s, 140 * s)); g.lineWidth = 2.5; g.stroke(); g.lineWidth = 1.5; }
+  // skid ball
+  const sb = clamp((st.beta || 0) * 3, -1, 1) * 40 * s, sy = H * 0.8; g.strokeRect(cx - 50 * s, sy - 8 * s, 100 * s, 16 * s);
+  g.beginPath(); g.moveTo(cx - 9 * s, sy - 8 * s); g.lineTo(cx - 9 * s, sy + 8 * s); g.moveTo(cx + 9 * s, sy - 8 * s); g.lineTo(cx + 9 * s, sy + 8 * s); g.stroke();
+  g.beginPath(); g.arc(cx + sb, sy, 6 * s, 0, 7); g.fill();
+  g.textAlign = 'center'; g.font = `600 ${Math.round(14 * s)}px Rajdhani, sans-serif`;
+  if (st.vrs > 0.3) g.fillText('VORTEX RING', cx, cy + 110 * s); else if (tq > 100) g.fillText('TORQUE', cx, cy + 110 * s);
+  g.restore();
 }
 
 // ===================== aircraft models (low-poly, original designs) =====================
@@ -6144,9 +6347,9 @@ const AC = {
   ah64: {
     key: 'ah64', name: 'AH-64D Apache', sub: 'Longbow attack helicopter · 30 mm cannon', kind: 'heli', build: buildAH64, ah64: true, disc: 168,
     // 11,800 lb empty (D), 2,440 lb internal fuel; with crew, 1,200 rounds and 8 Hellfires it's at the normal 16,000 lb mission weight
-    mass: 6150, fuelMax: 1110, burn: 0.16, I: [9000, 34000, 30000],
+    mass: 6150, fuelMax: 1110, burn: 0.16, I: [9000, 38000, 42000],
     // two T700-GE-701C, 1,890 shp each: enough to hover out of ground effect at mission weight with margin, climbs ~2,500 ft/min
-    TMAX: 1.4 * 7260 * 9.81, CDA: [2.6, 32, 20], CYC: [36000, 0, 78000], PED: 46000, DAMP: [26000, 52000, 62000], TORQ: 16000,
+    TMAX: 1.4 * 7260 * 9.81, CDA: [3.2, 28, 18], CYC: [36000, 0, 78000], PED: 46000, DAMP: [26000, 52000, 62000], TORQ: 16000,
     spool: 0.4, startTime: 12,
     weapons: { m: [[-0.04, -0.71, -1.98], [-0.04, -1.06, -1.95], [-0.04, -1.06, -1.65], [-0.04, -0.71, -1.62], [-0.04, -0.69, 1.68], [-0.04, -1.06, 1.71], [-0.04, -1.05, 2.0], [-0.04, -0.7, 2.04]], b: [] },
     gear: [
@@ -6159,8 +6362,8 @@ const AC = {
       { p: [5.1, -0.6, 0], piece: 'fuse', kind: 'fuse', n: 'Nose' }, { p: [2.4, -1.2, 0], piece: 'fuse', kind: 'fuse', n: 'Gun turret' },
       { p: [-1.5, -1.0, 0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.5, -1.0, -0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' },
       { p: [-0.3, -0.35, 2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }, { p: [-0.3, -0.35, -2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }],
-    collapse: 3.5, camDist: 24, airSpawn: 35, airThr: 0.62,
-    tips: 'Collective (left slider) to about 60% to hover. Push the cyclic to fly forward; pedals turn the nose. GUN fires the 30 mm cannon: in the cockpit it points where you look, from outside it follows the nose, and the sight snaps onto a target near the crosshair (green box). MSL fires a Hellfire at the boxed target; BOMB fires a pair of Hydra rockets straight ahead.',
+    collapse: 3.5, camDist: 24, airSpawn: 35, airThr: 0.44,
+    tips: 'Collective (left slider) to about 45% to hover; the TORQUE gauge shows how much of the engines you are using: past 100% the rotor droops. Push the cyclic to tilt the rotor and fly forward; pedals work the tail rotor. Feel the shudder through translational lift at 15 kt, and never sink fast with no airspeed: that is the vortex ring. GUN fires the 30 mm cannon: in the cockpit it points where you look, from outside it follows the nose, and the sight snaps onto a target near the crosshair (green box). MSL fires a Hellfire at the boxed target; BOMB fires a pair of Hydra rockets straight ahead.',
     help: 'The AH-64D Apache Longbow: two General Electric T700-GE-701C turboshafts of 1,890 shp, a 14.6 m four-blade main rotor, a four-blade tail rotor set in a non-orthogonal X, and the Longbow fire-control radar on top of the mast. Never-exceed 197 kt, cruise about 143 kt, climb about 2,500 ft/min, ceiling 21,000 ft. The M230 chain gun under the nose fires 30 mm rounds at 625 a minute from a 1,200-round magazine; in the real helicopter it belongs to the front-seat co-pilot/gunner, here you fly and fight. 8 AGM-114 Hellfires on the inner pylons, two 19-shot Hydra 70 rocket pods outside. 3D model: “Boeing AH-64D Apache Combat Helicopter” by Muhamad Mirza Arrafi (CC BY 4.0).',
   },  exec: {
     key: 'exec', name: 'Twin Heli', sub: 'Medium twin, rescue / VIP', kind: 'heli', build: () => buildExec(CFG.livery), liveries: [['rescue', 'Rescue'], ['exec', 'Executive']],
@@ -6615,8 +6818,9 @@ function b7meshes(group, texs, matFor, D) {
   return b7decode(group, D).map(ch => {
     const glass = !ch.uv && ch.col[0] < 0.2 && ch.col[0] > ch.col[2] + 0.03;
     const col = glass ? [0.1, 0.13, 0.17] : ch.col, mat = glass ? 2 : matFor(ch);
-    if (ch.uv && ch.tan && texs.maps) {   // physically based skin
-      const mb = new PMB(texs[ch.tex], texs.maps[0], texs.maps[1]), d = new Float32Array(ch.nv * 16);
+    const mp = texs.mapsFor ? texs.mapsFor[ch.tex] : texs.maps;   // one shared set of maps, or one per texture
+    if (ch.uv && ch.tan && mp) {   // physically based skin
+      const mb = new PMB(texs[ch.tex], mp[0], mp[1]), d = new Float32Array(ch.nv * 16);
       for (let i = 0, o = 0; i < ch.nv; i++) {
         d[o++] = ch.pos[i * 3]; d[o++] = ch.pos[i * 3 + 1]; d[o++] = ch.pos[i * 3 + 2]; d[o++] = ch.nor[i * 3]; d[o++] = ch.nor[i * 3 + 1]; d[o++] = ch.nor[i * 3 + 2];
         d[o++] = 1; d[o++] = 1; d[o++] = 1; d[o++] = mat; d[o++] = ch.uv[i * 2]; d[o++] = ch.uv[i * 2 + 1];
@@ -7387,6 +7591,7 @@ function stepSim(dt) {
     st.stallWarn = !!a.limits && st.airborne && V > 15 && alpha > a.AS - FLAP(a.flapAS) - (a.warnMargin || 4.5) * D2R;   // reed stall horn: sounds ~5-10 kt before the stall
   } else {
     // ---- helicopter ----
+    if (a.ah64) { const r = ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L); Fb = V3.add(Fb, r.F); Mb = V3.add(Mb, r.M); st.thrust = r.T; st.alpha = 0; st.beta = V > 3 ? Math.atan2(vb[2], vb[0]) : 0; st.stall = false; } else {
     const h = agl - 1.4;
     const ge = h < 6 ? 1 + 0.12 * (1 - Math.max(0, h) / 6) : 1;
     const vh = Math.hypot(vb[0], vb[2]);
@@ -7422,6 +7627,7 @@ function stepSim(dt) {
     const dk = 0.15 + 0.85 * rotorOK;
     Mb = V3.add(Mb, [a.CYC[0] * cr * st.rpm * rotorOK - st.w[0] * a.DAMP[0] * dk, -a.PED * py * st.rpm * boomOK + a.TORQ * c.thr * rr * rotorOK * (st.engine ? 1 : 0.1) - st.w[1] * a.DAMP[1] * (0.25 + 0.75 * boomOK) - vane * boomOK, a.CYC[2] * cp * st.rpm * rotorOK - st.w[2] * a.DAMP[2] * dk]);
     st.alpha = 0; st.beta = beta; st.stall = false;
+    }
   }
 
   if (a.sr71) { // compressor-inlet and skin temperature: ram heating grows with Mach squared
@@ -8066,6 +8272,13 @@ function shot(kind, v = 1) {
     const s = noise(0.12), b = ctx.createBiquadFilter(); b.type = 'bandpass'; b.frequency.value = 650; b.Q.value = 0.9; s.connect(b);
     const am = ctx.createGain(), lfo = ctx.createOscillator(), lg = ctx.createGain(); lfo.type = 'square'; lfo.frequency.value = 100; lg.gain.value = 0.5; lfo.connect(lg); lg.connect(am.gain); am.gain.value = 0.5; b.connect(am);
     lfo.start(t); lfo.stop(t + 0.15); env(am, 0.003, 0.9 * v, 0.1);
+  } else if (kind === 'gun30') {   // M230: each 30 mm round is its own heavy thump — 10 a second, you hear every one
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(95, t); o.frequency.exponentialRampToValueAtTime(38, t + 0.11); o.start(t); o.stop(t + 0.2); env(o, 0.002, 1.1 * v, 0.13);
+    const s = noise(0.16), b = ctx.createBiquadFilter(); b.type = 'lowpass'; b.frequency.setValueAtTime(2400, t); b.frequency.exponentialRampToValueAtTime(300, t + 0.12); s.connect(b); env(b, 0.001, 0.9 * v, 0.12);
+    const s2 = noise(0.05), h = ctx.createBiquadFilter(); h.type = 'highpass'; h.frequency.value = 2500; s2.connect(h); env(h, 0.0005, 0.35 * v, 0.03);
+  } else if (kind === 'hit30') {   // a 30 mm HEDP round bursting downrange: a dull crump
+    const s = noise(0.5), b = ctx.createBiquadFilter(); b.type = 'lowpass'; b.frequency.value = 520; s.connect(b); env(b, 0.004, 0.75 * v, 0.4);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(70, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.3); o.start(t); o.stop(t + 0.4); env(o, 0.003, 0.6 * v, 0.3);
   } else if (kind === 'pop') { // cough while a piston engine catches
     const s = noise(0.12), b = ctx.createBiquadFilter(); b.type = 'lowpass'; b.frequency.value = 500; s.connect(b); env(b, 0.003, 0.5 * v, 0.09);
   } else if (kind === 'growl') {   // seeker tracking a heat source
@@ -10575,8 +10788,8 @@ function stepGun(dt) {
     while (GUN.acc >= 1) { GUN.acc--; if (!CFG.unlimitedWpn) st.ammo = Math.max(0, st.ammo - 1);
       const d = V3.norm(V3.add(d0, [(Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004, (Math.random() - 0.5) * 0.004]));
       GUN.rounds.push({ p: mz.slice(), v: V3.add(st.vel, V3.mul(d, AH64.GUN_V)), t: Math.random() * 0.02, own: true, he: true });
-      spawnFx('flash', mz, st.vel, 0.6); SIM.ev.push({ t: 'gun', v: 1 }); }
-    SIM.shake = Math.max(SIM.shake, 0.12);
+      ah64Shot(st, mz, d); }
+    SIM.shake = Math.max(SIM.shake, 0.22);
   } else if (g && !g.turret && st.gunOn && !st.crashed && !st.ej && st.airborne && (st.ammo > 0 || CFG.unlimitedWpn)) {
     GUN.acc += dt * 25;   // 25 tracers a second, each standing for four rounds of a 6000 rpm cannon
     const f = Q.rot(st.q, [1, 0, 0]), mz = V3.add(st.pos, Q.rot(st.q, g.p));
@@ -10590,13 +10803,13 @@ function stepGun(dt) {
   for (const r of GUN.rounds) {
     const p0 = r.p; r.v[1] -= GRAV * dt; r.p = V3.add(r.p, V3.mul(r.v, dt)); r.t += dt;
     if (r.own) {
-      for (const ai of AI.list) if (!ai.dead && segDist(p0, r.p, ai.p) < (ai.kind === 'b737' ? 14 : 7)) { r.t = 99; aiGunHit(ai, undefined, r.p); break; }
+      for (const ai of AI.list) if (!ai.dead && segDist(p0, r.p, ai.p) < (ai.kind === 'b737' ? 14 : 7)) { r.t = 99; aiGunHit(ai, undefined, r.p); if (r.he) { aiGunHit(ai, undefined, r.p); ah64Burst(r.p, false, 0.8); } break; }
       if (r.t > 90) continue;
-      for (const s of NAVY.ships) if (!s.dead && !(s.sink > 0) && Math.hypot(r.p[0] - s.p[0], r.p[2] - s.p[2]) < s.len * 0.45 && r.p[1] < s.p[1] + 28) { r.t = 99; spawnFx('spark', r.p, [0, 6, 0]); navyHit(s.p, s.len, 0.035); break; }
+      for (const s of NAVY.ships) if (!s.dead && !(s.sink > 0) && Math.hypot(r.p[0] - s.p[0], r.p[2] - s.p[2]) < s.len * 0.45 && r.p[1] < s.p[1] + 28) { r.t = 99; spawnFx('spark', r.p, [0, 6, 0]); navyHit(s.p, s.len, r.he ? 0.09 : 0.035); if (r.he) ah64Burst(r.p, false, 1); break; }
       if (r.t > 90) continue;
-      for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 6) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); t.gh = (t.gh || 0) + 1; if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); } break; }
+      for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 6) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); t.gh = (t.gh || 0) + (r.he ? 2 : 1); if (r.he) ah64Burst(r.p, false, 1); if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); } break; }
       if (r.t > 90) continue;
-      for (const s of SAMS.sites) if (!s.dead && V3.len(V3.sub(s.p, r.p)) < 9) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); s.hp -= 0.25; if (s.hp <= 0) samKill(s); break; }
+      for (const s of SAMS.sites) if (!s.dead && V3.len(V3.sub(s.p, r.p)) < 9) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); s.hp -= r.he ? 0.5 : 0.25; if (r.he) ah64Burst(r.p, false, 1); if (s.hp <= 0) samKill(s); break; }
     } else if (r.friend) {   // a wingman's rounds
       for (const ai of AI.list) if (!ai.dead && ai.role === 'hostile' && segDist(p0, r.p, ai.p) < 7) { r.t = 99; aiGunHit(ai, r.friend, r.p); break; }
     } else if (!SIM.st.crashed && segDist(p0, r.p, SIM.st.pos) < 6) {   // enemy rounds hitting you
@@ -10605,7 +10818,7 @@ function stepGun(dt) {
       if (st2.gunHits >= 9) destroy('Shot down by gunfire');
     }
     if (r.t < 90) { const sf = surfaceAt(r.p[0], r.p[2]); if (r.p[1] <= sf.h) { r.t = 99; spawnFx(sf.water ? 'spray' : 'dust', [r.p[0], sf.h + 0.5, r.p[2]], [0, sf.water ? 9 : 4, 0], sf.water ? 1 : 0.8);
-      if (r.he) { spawnFx('flash', [r.p[0], sf.h + 0.6, r.p[2]], [0, 0, 0], 0.9); spawnFx('dust', [r.p[0], sf.h + 0.8, r.p[2]], [0, 6, 0], 1.2); for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 5) { t.gh = (t.gh || 0) + 1; if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); ui.toast('TARGET HIT', 'Destroyed by 30 mm'); } } } } }   // 30 mm HEDP bursts on impact
+      if (r.he) { ah64Burst([r.p[0], sf.h, r.p[2]], sf.water, 1); for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 7) { t.gh = (t.gh || 0) + 2; if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); ui.toast('TARGET HIT', 'Destroyed by 30 mm'); } } } } }   // 30 mm HEDP bursts on impact
   }
   GUN.rounds = GUN.rounds.filter(r => r.t < 2.6);
 }
@@ -10775,7 +10988,8 @@ function drawCombat() {
 }
 function combatGlows() {
   b2defGlows();
-  for (const r of GUN.rounds) { const o = r.own || r.friend; DYNG.push([r.p[0], r.p[1], r.p[2], o ? 700 : 760, o ? 1 : 0.4, o ? 0.72 : 1, o ? 0.3 : 0.45, 0, 0, 0]); }
+  for (const r of GUN.rounds) { if (r.he) { DYNG.push([r.p[0], r.p[1], r.p[2], 1500, 1, 0.62, 0.22, 0, 0, 0]); const b = V3.sub(r.p, V3.mul(r.v, 0.012)); DYNG.push([b[0], b[1], b[2], 900, 1, 0.5, 0.15, 0, 0, 0]); continue; }
+    const o = r.own || r.friend; DYNG.push([r.p[0], r.p[1], r.p[2], o ? 700 : 760, o ? 1 : 0.4, o ? 0.72 : 1, o ? 0.3 : 0.45, 0, 0, 0]); }
   for (const s of SAMS.sites) if (!s.dead) DYNG.push([s.p[0] + 8, s.p[1] + 9.5, s.p[2] - 8, 900, 1, 0.12, 0.08, 0, 0, Math.sin(s.ang * 3) > 0.6 ? 0 : 0]);
 }
 // HUD: gun pipper where the rounds will be at the target's range, and a lead box on the nearest bandit
@@ -12850,9 +13064,9 @@ function updateHUD(dt) {
   const f = Q.rot(st.q, [1, 0, 0]);
   const hd = (Math.round(Math.atan2(f[0], -f[2]) / D2R) + 360) % 360;
   $('hdg').textContent = String(hd).padStart(3, '0');
-  $('pwrL').textContent = a.kind === 'heli' ? 'COLL' : a.hyper || a.sr71 || a.f22 || a.f35 ? 'MACH' : a.vtol ? 'THRUST' : a.airliner || a.b2 ? 'N1' : 'RPM';
+  $('pwrL').textContent = a.ah64 ? 'TORQUE' : a.kind === 'heli' ? 'COLL' : a.hyper || a.sr71 || a.f22 || a.f35 ? 'MACH' : a.vtol ? 'THRUST' : a.airliner || a.b2 ? 'N1' : 'RPM';
   $('pwr').style.color = st.lim && st.lim.red ? '#ff5a4a' : '';
-  $('pwr').textContent = a.kind === 'heli' ? Math.round(c.thr * 100) + '%' : a.hyper || a.sr71 || a.f22 || a.f35 ? (st.mach || 0).toFixed(2) : a.vtol || a.airliner || a.b2 ? Math.round(st.rpm * 100) + '%' : Math.round(st.rpm * 2700);
+  $('pwr').textContent = a.ah64 ? Math.round((st.torque || 0) * 100) + '%' : a.kind === 'heli' ? Math.round(c.thr * 100) + '%' : a.hyper || a.sr71 || a.f22 || a.f35 ? (st.mach || 0).toFixed(2) : a.vtol || a.airliner || a.b2 ? Math.round(st.rpm * 100) + '%' : Math.round(st.rpm * 2700);
   $('fuel').textContent = SIM.opt.infFuel ? '∞' : Math.round(st.fuel / a.fuelMax * 100) + '%';
   const pa = papiFor(), dots = $('papi').children;
   for (let i = 0; i < 4; i++) dots[i].style.background = !pa ? '#333' : pa.ang > [3.5, 3.17, 2.83, 2.5][i] ? '#fff' : '#ff3030';
@@ -12873,6 +13087,8 @@ function updateHUD(dt) {
   if (st.spin) w.push('SPIN — OPPOSITE RUDDER, STICK FORWARD');
   if (st.vrs > 0.3) w.push('VORTEX RING — FLY FORWARD');
   if (a.kind === 'heli' && st.airborne && st.rpm < 0.85) w.push('LOW ROTOR RPM — COLLECTIVE DOWN');
+  if (a.ah64 && st.airborne && (st.torque || 0) > 0.98) w.push('TORQUE LIMIT — ROTOR DROOPING');
+  if (a.ah64 && st.vrs > 0.3) w.push('VORTEX RING — FORWARD CYCLIC TO FLY OUT');
   if (a.piston && st.cht > 235) w.push('ENGINE HOT');
   if (a.piston && st.carbIce > 0.3 && !c.carbHeat) w.push('ROUGH ENGINE — CARB ICE?');
   if (a.hyper && st.skinT > 1420) w.push('SKIN OVERHEAT');
@@ -13628,6 +13844,7 @@ function drawJetHUD(VP) {
   const cues = apacheCues(g, VP, W, H) | drawWeaponCues(g, VP, W, H) | rocketCues(g, VP, W, H) | missionCues(g, VP, W, H) | drawRain(g, VP, W, H) | drawNukeAfter(g, VP, W, H);
   hudc.style.display = show || cues ? 'block' : 'none';
   if (!show) return;
+  if (st.acd.ah64) return apacheIHADSS(g, W, H);   // Apache: IHADSS helmet symbology, not a jet HUD
   const proj = d => { const p = V3.add(cam.eye, V3.mul(d, 1000)), v = [0, 0, 0, 0]; for (let r = 0; r < 4; r++) v[r] = VP[r] * p[0] + VP[4 + r] * p[1] + VP[8 + r] * p[2] + VP[12 + r]; return v[3] > 0 ? [(v[0] / v[3] * 0.5 + 0.5) * W, (0.5 - v[1] / v[3] * 0.5) * H] : null; };
   // the HUD glass sits straight ahead of the seat; clip symbology to it
   const ctr = proj(Q.rot(st.q, [1, 0.0, 0])); if (!ctr) return;
