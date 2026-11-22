@@ -668,8 +668,9 @@ function initGL(canvas) {
       vec2 q = vAp;
       float near = 1.0 - smoothstep(40.0, 700.0, dist), fine = 1.0 - smoothstep(3.0, 70.0, dist);
       if (m < 4.5) {
-        c *= 0.88 + 0.2 * vn(q * 0.045) + 0.1 * (vn(q * 0.6 + 3.0) - 0.5) * near;
-        c *= 1.0 + (vn(q * 17.0) - 0.5) * 0.26 * fine + (vn(q * 4.3) - 0.5) * 0.12 * fine;      // aggregate
+        c *= 0.95 + 0.08 * vn(q * 0.045) + 0.04 * (vn(q * 0.6 + 3.0) - 0.5) * near;   // real runway asphalt is fairly even; the wear shows as rubber and joints
+        c *= 1.0 + (vn(q * 17.0) - 0.5) * 0.2 * fine + (vn(q * 4.3) - 0.5) * 0.06 * fine;      // aggregate
+        c *= 1.0 - 0.06 * fine * step(0.55, fract(q.x / 0.032)) * step(abs(q.y), vApS.y);      // saw-cut grooves across the runway, seen up close
         float cr = abs(vn(q * vec2(0.11, 0.43) + 11.0) - 0.5);                      // sealed cracks, close in only
         c *= 1.0 - 0.16 * (1.0 - smoothstep(0.003, 0.009, cr)) * (1.0 - smoothstep(15.0, 160.0, dist));
         float jn = (0.5 - abs(fract(q.y / 3.75) - 0.5)) * 3.75;                    // paving-lane joints
@@ -2323,7 +2324,7 @@ function strokeSeg(mb, p, q, w, put, col, ref) {
 const COL = { // natural palette
   sand: hex('#d6c8a4'), grass: hex('#4c7232'), grass2: hex('#3f6429'), forest: hex('#24401e'),
   rock: hex('#6e675d'), rock2: hex('#857d70'), snow: hex('#eef1f4'), sea: hex('#1d6f93'),
-  asphalt: hex('#4a4d57'), white: hex('#f6f6f2'), conc: hex('#c9c4bd'),
+  asphalt: hex('#46474b'), white: hex('#f6f6f2'), conc: hex('#c9c4bd'),
 };
 const LIGHTS = [];   // night light sources: { p, c }
 const GLOWS = [];    // light points drawn as glows: [x, y, z, size, r, g, b]
@@ -5173,8 +5174,10 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   const vn = V3.dot(vb, n0), vin = V3.sub(vb, V3.mul(n0, vn)), mu = V3.len(vin) / OR, lc = vn / OR;
   // inflow: momentum theory, a few damped fixed-point passes from last step's answer
   let li = st.li, CT = 0;
-  for (let k = 0; k < 5; k++) { const lam = lc + li; CT = R.SIG * R.CLA / 2 * (th0 * (1 / 3 + mu * mu / 2) - lam / 2); const ln = CT / (2 * Math.sqrt(mu * mu + lam * lam + 1e-5)); li = clamp(0.5 * li + 0.5 * ln, 0, 0.2); }
-  st.li = li;
+  // (well damped, with a floor under the inflow, so at flat pitch on the ground it can't flip-flop step to step and shake the airframe)
+  for (let k = 0; k < 8; k++) { const lam = lc + li; CT = R.SIG * R.CLA / 2 * (th0 * (1 / 3 + mu * mu / 2) - lam / 2); const ln = CT / (2 * Math.sqrt(mu * mu + lam * lam + 4e-4)); li = clamp(0.65 * li + 0.35 * ln, 0, 0.2); }
+  li = st.li + (li - st.li) * Math.min(1, dt * 30); st.li = li;
+  { const lam = lc + li; CT = R.SIG * R.CLA / 2 * (th0 * (1 / 3 + mu * mu / 2) - lam / 2); }
   const lam = lc + li;
   const z = Math.max(agl + 2.0, 0.55 * R.R), kge = Math.min(1.18, 1 / (1 - Math.pow(R.R / (4 * z), 2) / (1 + Math.pow(mu / Math.max(Math.abs(lam), 0.01), 2))));
   let T = rho * R.A * OR * OR * CT * kge * rotorOK * (1 - 0.04 * Math.exp(-mu / 0.05));   // a little lost to downwash on the fuselage and stub wings in the hover
@@ -6393,8 +6396,8 @@ const AC = {
     spool: 0.4, startTime: 12,
     weapons: { m: [[-0.04, -0.71, -1.98], [-0.04, -1.06, -1.95], [-0.04, -1.06, -1.65], [-0.04, -0.71, -1.62], [-0.04, -0.69, 1.68], [-0.04, -1.06, 1.71], [-0.04, -1.05, 2.0], [-0.04, -0.7, 2.04]], b: [] },
     gear: [
-      { p: [0.66, -1.61, 0.97], k: 600000, c: 52000, brake: true, piece: 'gear' }, { p: [0.66, -1.61, -0.92], k: 600000, c: 52000, brake: true, piece: 'gear' },   /* stiff oleos, wheel centres measured off the model */
-      { p: [-10.6, -1.63, 0.025], k: 220000, c: 9000, piece: 'gear', steer: true }],   // the tail wheel swivels
+      { p: [0.66, -1.656, 0.97], k: 600000, c: 52000, brake: true, piece: 'gear' }, { p: [0.66, -1.656, -0.92], k: 600000, c: 52000, brake: true, piece: 'gear' },   /* stiff oleos, wheel centres measured off the model; contact set the static stroke below the tyre so it sits ON the runway */
+      { p: [-10.6, -1.65, 0.025], k: 220000, c: 9000, piece: 'gear', steer: true }],   // the tail wheel swivels
     hard: [
       { p: [-11.0, 1.4, -0.74], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' }, { p: [-11.0, 2.3, 0], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' },
       { p: [7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' }, { p: [-7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' },
