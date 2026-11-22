@@ -10018,7 +10018,7 @@ function wingEngage(ai, dt) {
   }
   return true;
 }
-const MILITARY = k => k === 'f35' || k === 'f35b' || k === 'jet' || k === 'hyper' || k === 'sr71' || k === 'f22' || k === 'b2';
+const MILITARY = k => k === 'ah64' || k === 'f35' || k === 'f35b' || k === 'jet' || k === 'hyper' || k === 'sr71' || k === 'f22' || k === 'b2';
 const PLAYER_TGT = { get p() { return SIM.st.pos; }, dead: false, kind: 'you' };
 
 function aiMake(kind, role, p, hdg, spd, opt = {}) {
@@ -10071,7 +10071,7 @@ function stepAI(dt) {
   if (!AI.list) return;
   const mil = MILITARY(a.key), liner = !!a.airliner;
   // scramble the interceptors / join the escort once you are flying
-  if (CFG.intercept !== false && !st.crashed && st.airborne && st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h > 40) {
+  if (CFG.intercept !== false && !st.crashed && st.airborne && st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h > (a.kind === 'heli' ? 12 : 40)) {
     AI.scrT += dt;
     // your two wingmen form up on a fighter soon after take-off
     if (mil && WING_FOR[a.key] && !AI.wingOn && AI.scrT > 5) {
@@ -14100,7 +14100,7 @@ function updWpn() {
   $('bBomb').style.display = S.lo === 'aa' || (!S.b.length && !SIM.st.acd.ah64) ? 'none' : '';
   $('bRkt').style.display = SIM.st.acd.b2 ? '' : 'none'; if (SIM.st.acd.b2) { const R = SIM.st.rkt; $('bRktV').textContent = R ? (R.prop > 0 ? Math.ceil(R.prop) + 's' : 'EMPTY') : '120s'; $('bRkt').classList.toggle('armed', !!(R && R.on)); }
   $('bDef').style.display = SIM.st.def ? '' : 'none'; if (SIM.st.def) { $('bDefV').textContent = SIM.st.def.arm ? 'AUTO' : 'HOLD'; $('bDef').classList.toggle('armed', !!SIM.st.def.arm); }
-  $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) ? '' : 'none';
+  $('bGun').style.display = gunFor(SIM.st.acd) ? '' : 'none'; $('bEject').style.display = MILITARY(SIM.st.acd.key) && !SIM.st.acd.ah64 ? '' : 'none';   // the Apache has no ejection seats
   $('bNuke').style.display = S.n ? '' : 'none'; if (S.n) $('bNukeV').textContent = CFG.unlimitedWpn ? '∞' : S.n.filter(Boolean).length;
 }
 // weapon cues on the overlay: lock diamond on the target, bomb impact circle (works in every view)
