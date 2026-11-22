@@ -6495,7 +6495,7 @@ const AC = {
       { p: [-1.5, -1.0, 0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' }, { p: [-1.5, -1.0, -0.6], piece: 'fuse', kind: 'fuse', n: 'Belly' },
       { p: [-0.3, -0.35, 2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }, { p: [-0.3, -0.35, -2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }],
     limits: { vne: 197, vfe: [0], gMax: 3.5, gMin: -0.5 },   /* AH-64D: Vne 197 kt, +3.5 / -0.5 g */
-    collapse: 5.2, camDist: 24, airSpawn: 35, airThr: 0.44,   /* crashworthy gear: takes a ~1,000 fpm arrival; past that it strokes and breaks */
+    collapse: 5.2, camDist: 36, airSpawn: 35, airThr: 0.44,   /* crashworthy gear: takes a ~1,000 fpm arrival; past that it strokes and breaks */
     tips: 'EASY mode (default): push the collective above the HOLD mark to climb, below it to descend, on the mark to hold your height. The stick sets your speed and direction: push to fly forward, let go and it slows to a hover; left/right slides you sideways, or banks into a turn at speed. Pedals turn on the spot. Tap EASY to switch to REAL for the full Apache. GUN aims where you look (cockpit) or ahead; HELLFIRE fires at the boxed target; ROCKETS fires a pair straight ahead.',
     help: 'The AH-64D Apache Longbow: two General Electric T700-GE-701C turboshafts of 1,890 shp, a 14.6 m four-blade main rotor, a four-blade tail rotor set in a non-orthogonal X, and the Longbow fire-control radar on top of the mast. Never-exceed 197 kt, cruise about 143 kt, climb about 2,500 ft/min, ceiling 21,000 ft. The M230 chain gun under the nose fires 30 mm rounds at 625 a minute from a 1,200-round magazine; in the real helicopter it belongs to the front-seat co-pilot/gunner, here you fly and fight. 8 AGM-114 Hellfires on the inner pylons, two 19-shot Hydra 70 rocket pods outside. 3D model: “Boeing AH-64D Apache Combat Helicopter” by Muhamad Mirza Arrafi (CC BY 4.0).',
   },  exec: {
@@ -10026,7 +10026,7 @@ function aiMake(kind, role, p, hdg, spd, opt = {}) {
     msl: role === 'hostile' ? 2 : 0, cool: 6 + Math.random() * 4, span: kind === 'b737' ? 35.9 : kind === 'jet' ? 9.2 : 11 }, opt);
 }
 function aiReset() {
-  AI.list = []; AI.flares = []; AI.t = 0; AI.scrT = 0; AI.hostileOn = false; AI.escortOn = false; AI.wingOn = false; AI.warnT = 0; AI.flareN = 16;
+  AI.list = []; AI.flares = []; AI.t = 0; AI.scrT = 0; AI.hostileOn = false; AI.escortOn = false; AI.wingOn = false; AI.hwingOn = false; AI.warnT = 0; AI.flareN = 16;
   if (CFG.traffic === false) return;
   const bay = AIRPORTS[0], fx = Math.sin(bay.hdg * D2R), fz = -Math.cos(bay.hdg * D2R), rx = -fz, rz = fx, hl = bay.len / 2;
   const W = (a, c, y) => [bay.x + fx * a + rx * c, bay.elev + y, bay.z + fz * a + rz * c];
@@ -10069,6 +10069,12 @@ function stepAI(dt) {
   AI.t += dt;
   stepSeeker(dt);
   if (!AI.list) return;
+  { const st = SIM.st, a = st.acd;   // the Apache flies with two more Apaches on its wings, from the moment it spawns
+    if (a.ah64 && !AI.hwingOn && !st.crashed && CFG.traffic !== false) { AI.hwingOn = true;
+      const f = Q.rot(st.q, [1, 0, 0]), fh = V3.norm([f[0], 0, f[2]]), rh = [-fh[2], 0, fh[0]], hdg = Math.atan2(fh[0], -fh[2]);
+      for (const [s, name] of [[-1, 'Reaper 2'], [1, 'Reaper 3']]) { const p = V3.add(st.pos, V3.add(V3.mul(fh, -10), V3.mul(rh, s * 21))); p[1] = Math.max(p[1], surfaceAt(p[0], p[2]).h + 1.6);
+        AI.list.push(aiMake('ah64', 'hwing', p, hdg, 0, { side: s, name, v: st.vel.slice(), gear: 1, hp: 8 })); }
+      ui.toast('REAPER FLIGHT', 'Reaper 2 and Reaper 3 are with you, one each side. They stay on your wings and shoot what threatens you'); } }
   const mil = MILITARY(a.key), liner = !!a.airliner;
   // scramble the interceptors / join the escort once you are flying
   if (CFG.intercept !== false && !st.crashed && st.airborne && st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h > (a.kind === 'heli' ? 12 : 40)) {
@@ -10083,7 +10089,8 @@ function stepAI(dt) {
     if (mil && !AI.hostileOn && st.pos[1] > 16000) AI.scrT = Math.min(AI.scrT, 12);   // nothing they have can reach you up there
     if (mil && !AI.hostileOn && !MISSION.on && AI.scrT > 18) {
       // the alert fighters go off the carrier's catapults (with the warships switched off there is no carrier: they arrive by air)
-      if (carrierLaunch(2, { skill: 0.4 })) ui.toast('CARRIER LAUNCHING', '2 bandits off the deck of the Leviathan, coming for you');
+      if (a.kind === 'heli') heliGunships(2, 0.4);
+      if (carrierLaunch(4, { skill: 0.4 })) ui.toast('CARRIER LAUNCHING', '4 bandits off the deck of the Leviathan, coming for you' + (a.kind === 'heli' ? ' — and 2 enemy gunships low' : ''));
       else if (CFG.navy === false) { AI.hostileOn = true;
         const back = V3.norm([-st.vel[0], 0, -st.vel[2]]), side = [-back[2], 0, back[0]];
         for (const s of [-1, 1]) { const p = V3.add(st.pos, V3.add(V3.mul(back[0] || back[2] ? back : [1, 0, 0], 5500), V3.mul(side, s * 400))); p[1] = Math.max(st.pos[1], surfaceAt(p[0], p[2]).h + 300);
@@ -10135,9 +10142,10 @@ function stepAI(dt) {
         ai.tgtSpd = gl > 900 ? clamp(st.tas + (ai.wing ? 110 : 70), 120, ai.wing ? 760 : 330) : ai.tgtSpd;
         aiSteer(ai, V3.add(slot, V3.mul(st.vel, 3)), dt, ai.wing ? { maxBank: 1.45, kb: 3.6, rollRate: 3.2, maxVs: 90, kv: 0.6, acc: 16 } : { maxBank: 1.1, kb: 3, rollRate: 2.2, maxVs: 40, kv: 0.6, acc: 12 });
       }
+    } else if (ai.role === 'hwing') { aiHeliWing(ai, dt);
     } else if (ai.role === 'hostile') { if (ai.cat) carrierCat(ai, dt); else aiHostile(ai, dt); }
     // mid-air collision with you
-    if (!st.crashed && !ai.dead && !ai.wing && V3.len(V3.sub(ai.p, st.pos)) < (ai.span + (G.models[a.key].span || 10)) * 0.32) {
+    if (!st.crashed && !ai.dead && !ai.wing && ai.role !== 'hwing' && V3.len(V3.sub(ai.p, st.pos)) < (ai.span + (G.models[a.key].span || 10)) * 0.32) {
       ai.dead = true; explode(ai.p, 0.6, false); destroy('Mid-air collision with ' + ai.name);
     }
   }
@@ -10153,6 +10161,7 @@ function stepAI(dt) {
   AI.inbound = inbound;
 }
 function aiHostile(ai, dt) {
+  if (ai.kind === 'heli' || ai.kind === 'ah64') return aiHeliHostile(ai, dt);   // gunships fight like helicopters
   const st = SIM.st, to = V3.sub(st.pos, ai.p), d = V3.len(to);
   if (!ai.tac) {   // briefed from the file they keep on you (brain.js) before they ever see you
     const T = ai.tac = brainTactics();
@@ -10256,9 +10265,92 @@ function aiMinimap(mm, n, L) {
     if (ai.dead) continue;
     const x = (ai.p[0] + L / 2) / L * n, y = (ai.p[2] + L / 2) / L * n;
     if (x < 3 || y < 3 || x > n - 3 || y > n - 3) continue;
-    mm.fillStyle = ai.role === 'hostile' ? '#ff4a3a' : ai.role === 'escort' ? '#62d6ff' : '#ffffff';
+    mm.fillStyle = ai.role === 'hostile' ? '#ff4a3a' : ai.role === 'escort' || ai.role === 'hwing' ? '#62d6ff' : '#ffffff';
     mm.beginPath(); mm.arc(x, y, ai.role === 'hostile' ? 4 : 3, 0, Math.PI * 2); mm.fill();
   }
+}
+
+// ---- Apache wingmen: hold a tight slot each side (24 m out, 12 m back, your height above the ground), lift off and land with you,
+// and put 30 mm bursts into any bandit or gunship that comes within 2.5 km ----
+function aiHeliWing(ai, dt) {
+  const st = SIM.st, f = Q.rot(st.q, [1, 0, 0]), fh = V3.norm([f[0], 0.0001, f[2]]), rh = V3.norm([-fh[2], 0, fh[0]]);
+  const slot = V3.add(st.pos, V3.add(V3.mul(fh, -10), V3.mul(rh, ai.side * 21)));
+  const g = surfaceAt(slot[0], slot[2]).h + 1.6, pAgl = st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h;
+  slot[1] = st.crashed ? g + 60 : g + Math.max(0, pAgl - 1.6);
+  ai.v = ai.v || [0, 0, 0];
+  const gap = V3.sub(slot, ai.p); let cor = V3.mul(gap, 0.9); const cl = V3.len(cor); if (cl > 45) cor = V3.mul(cor, 45 / cl);
+  const want = V3.add(st.crashed ? [0, 0, 0] : st.vel, cor);
+  let dv = V3.sub(want, ai.v); const dl = V3.len(dv), lim = 14 * dt; if (dl > lim) dv = V3.mul(dv, lim / dl);
+  ai.v = V3.add(ai.v, dv); ai.p = V3.add(ai.p, V3.mul(ai.v, dt));
+  const gh = surfaceAt(ai.p[0], ai.p[2]).h + 1.6; if (ai.p[1] < gh) { ai.p[1] = gh; if (ai.v[1] < 0) ai.v[1] = 0; }
+  // attitude: your heading; nose down to accelerate, banked into sideways acceleration
+  const acc = V3.mul(dv, 1 / Math.max(dt, 1e-3)), fwdV = V3.dot(ai.v, fh);
+  let dh = Math.atan2(fh[0], -fh[2]) - ai.hdg; while (dh > Math.PI) dh -= 2 * Math.PI; while (dh < -Math.PI) dh += 2 * Math.PI;
+  ai.hdg += clamp(dh, -1.2 * dt, 1.2 * dt);
+  const onG = ai.p[1] <= gh + 0.05;
+  ai.pitch += ((onG ? 0 : clamp(-V3.dot(acc, fh) / GRAV * 0.8 - fwdV * 0.0019, -0.35, 0.3)) - ai.pitch) * Math.min(1, dt * 3);
+  ai.bank += ((onG ? 0 : clamp(V3.dot(acc, rh) / GRAV * 0.8, -0.5, 0.5)) - ai.bank) * Math.min(1, dt * 3);
+  ai.spd = V3.len(ai.v); ai.gear = 1;
+  // guns
+  ai.cool = (ai.cool || 0) - dt;
+  if (!st.crashed && !onG) {
+    let best = null, bd = 2500;
+    for (const t of AI.list) if (t.role === 'hostile' && !t.dead && !t.cat) { const d = V3.len(V3.sub(t.p, ai.p)); if (d < bd) { bd = d; best = t; } }
+    if (best && ai.cool <= 0) { ai.burst = 1.0; ai.cool = 2.5 + Math.random() * 2; ai.tgt = best; }
+    if (ai.burst > 0 && ai.tgt && !ai.tgt.dead) {
+      ai.burst -= dt; ai.gacc = (ai.gacc || 0) + dt * AH64.RATE;
+      const t = ai.tgt, d = V3.len(V3.sub(t.p, ai.p)), tof = d / AH64.GUN_V, aim = V3.add(t.p, V3.add(V3.mul(V3.sub(t.v || [0, 0, 0], ai.v), tof), [0, 0.5 * GRAV * tof * tof, 0]));
+      const q = aiQ(ai), mz = V3.add(ai.p, Q.rot(q, [3.5, -0.9, 0]));
+      while (ai.gacc >= 1) { ai.gacc--; const dir = V3.norm(V3.add(V3.norm(V3.sub(aim, mz)), [(Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012, (Math.random() - 0.5) * 0.012]));
+        GUN.rounds.push({ p: mz.slice(), v: V3.add(ai.v, V3.mul(dir, AH64.GUN_V)), t: 0, own: true, friend: true, he: true });
+        spawnFx('flash', mz, ai.v, 1.0); if (Math.random() < 0.5) SIM.ev.push({ t: 'gun30', v: clamp(120 / Math.max(V3.len(V3.sub(ai.p, cam.eye)), 30), 0.05, 0.6) }); }
+    }
+  }
+}
+// ---- enemy attack helicopters (aggressor Apaches and light gunships): come in low, circle you at ~900 m nose-on, gun and missile ----
+function heliGunships(n, skill) {
+  const st = SIM.st, base = Math.random() * 6.283, kinds = st.acd.ah64 ? ['ah64', 'heli'] : ['heli'];
+  for (let i = 0; i < n; i++) {
+    const ang = base + (i - (n - 1) / 2) * 0.4, r = 6500 + Math.random() * 1500, p = [st.pos[0] + Math.cos(ang) * r, 0, st.pos[2] + Math.sin(ang) * r];
+    p[1] = surfaceAt(p[0], p[2]).h + 60 + Math.random() * 60;
+    const kind = kinds[i % kinds.length];
+    AI.list.push(aiMake(kind, 'hostile', p, Math.atan2(st.pos[0] - p[0], -(st.pos[2] - p[2])), 60, { gear: 1, name: (kind === 'ah64' ? 'Viper ' : 'Hind ') + (Math.floor(Math.random() * 90) + 10), hp: kind === 'ah64' ? 5 : 3, skill, v: [0, 0, 0], side: i % 2 ? 1 : -1, msl: kind === 'ah64' ? 2 : 1 }));
+  }
+  AI.hostileOn = true;
+  ui.toast('ENEMY GUNSHIPS — ' + n, 'Attack helicopters coming in low');
+}
+function aiHeliHostile(ai, dt) {
+  const st = SIM.st, to = V3.sub(st.pos, ai.p), d = V3.len(to), dh = Math.hypot(to[0], to[2]);
+  ai.v = ai.v || [0, 0, 0];
+  let tgt;
+  if (st.crashed) tgt = V3.add(ai.p, [Math.sin(ai.hdg) * 500, 0, -Math.cos(ai.hdg) * 500]);
+  else if (dh > 1500) tgt = V3.add(st.pos, V3.mul(st.vel, 3));
+  else { const a0 = Math.atan2(ai.p[2] - st.pos[2], ai.p[0] - st.pos[0]) + 0.3 * ai.side; tgt = [st.pos[0] + Math.cos(a0) * 900, 0, st.pos[2] + Math.sin(a0) * 900]; }
+  tgt[1] = Math.max(surfaceAt(tgt[0], tgt[2]).h + 35, (st.crashed ? ai.p[1] : st.pos[1]) + 20);
+  const tv = V3.sub(tgt, ai.p), tl = V3.len(tv), vmax = ai.kind === 'ah64' ? 80 : 70;
+  const want = V3.mul(V3.norm(tv), Math.min(vmax, tl * 0.25 + 15));
+  let dv = V3.sub(want, ai.v); const dl = V3.len(dv), lim = (6 + 4 * (ai.skill || 0.4)) * dt; if (dl > lim) dv = V3.mul(dv, lim / dl);
+  ai.v = V3.add(ai.v, dv); ai.p = V3.add(ai.p, V3.mul(ai.v, dt));
+  const gh = surfaceAt(ai.p[0], ai.p[2]).h + 20; if (ai.p[1] < gh) { ai.p[1] = gh; ai.v[1] = Math.max(0, ai.v[1]); }
+  // nose on you when close (a gunship fights pointing at you), otherwise along the flight path
+  const face = dh < 2200 && !st.crashed ? to : ai.v, wantH = Math.atan2(face[0], -face[2]);
+  let dhh = wantH - ai.hdg; while (dhh > Math.PI) dhh -= 2 * Math.PI; while (dhh < -Math.PI) dhh += 2 * Math.PI;
+  ai.hdg += clamp(dhh, -0.9 * dt, 0.9 * dt);
+  const fh = [Math.sin(ai.hdg), 0, -Math.cos(ai.hdg)], rh = [-fh[2], 0, fh[0]], acc = V3.mul(dv, 1 / Math.max(dt, 1e-3));
+  ai.pitch += (clamp(-V3.dot(acc, fh) / GRAV - V3.dot(ai.v, fh) * 0.002, -0.3, 0.25) - ai.pitch) * Math.min(1, dt * 3);
+  ai.bank += (clamp(V3.dot(acc, rh) / GRAV, -0.5, 0.5) - ai.bank) * Math.min(1, dt * 3);
+  ai.spd = V3.len(ai.v); ai.gear = 0;
+  if (st.crashed) return;
+  const f = [Math.sin(ai.hdg) * Math.cos(ai.pitch), Math.sin(ai.pitch), -Math.cos(ai.hdg) * Math.cos(ai.pitch)];
+  const off = Math.acos(clamp(V3.dot(f, V3.mul(to, 1 / Math.max(d, 1))), -1, 1));
+  aiGuns(ai, dt, d, off * 0.5, f);   // a turret gun: shoots across a wider cone
+  ai.cool -= dt;
+  if (ai.msl > 0 && ai.cool <= 0 && d < 4000 && d > 600 && off < 0.35) {
+    ai.msl--; ai.cool = 12 + Math.random() * 5; const q = aiQ(ai);
+    SIM.proj.push({ kind: 'm', p: V3.add(ai.p, Q.rot(q, [0, -1, 2.4])), v: V3.add(ai.v, V3.mul(f, 25)), t: 0, q, target: PLAYER_TGT, trail: 0, enemy: true, close: d < 3000 });
+    SIM.ev.push({ t: 'launch' }); ui.toast('MISSILE LAUNCH', ai.name + ' fired — FLARES and turn hard');
+  }
+  if (ai.msl === 0 && ai.cool < -25) ai.msl = 1;
 }
 
 // ===================== Warships =====================
@@ -10936,7 +11028,7 @@ function stepGun(dt) {
   for (const r of GUN.rounds) {
     const p0 = r.p; r.v[1] -= GRAV * dt; r.p = V3.add(r.p, V3.mul(r.v, dt)); r.t += dt;
     if (r.own) {
-      for (const ai of AI.list) if (!ai.dead && segDist(p0, r.p, ai.p) < (ai.kind === 'b737' ? 14 : 7)) { r.t = 99; aiGunHit(ai, undefined, r.p); if (r.he) { aiGunHit(ai, undefined, r.p); ah64Burst(r.p, false, 0.8); } break; }
+      for (const ai of AI.list) if (!ai.dead && ai.role !== 'hwing' && segDist(p0, r.p, ai.p) < (ai.kind === 'b737' ? 14 : 7)) { r.t = 99; aiGunHit(ai, undefined, r.p); if (r.he) { aiGunHit(ai, undefined, r.p); ah64Burst(r.p, false, 0.8); } break; }
       if (r.t > 90) continue;
       for (const s of NAVY.ships) if (!s.dead && !(s.sink > 0) && Math.hypot(r.p[0] - s.p[0], r.p[2] - s.p[2]) < s.len * 0.45 && r.p[1] < s.p[1] + 28) { r.t = 99; spawnFx('spark', r.p, [0, 6, 0]); navyHit(s.p, s.len, r.he ? 0.09 : 0.035); if (r.he) ah64Burst(r.p, false, 1); break; }
       if (r.t > 90) continue;
@@ -10979,7 +11071,8 @@ function stepWaves(dt) {
   AI.waveT = (AI.waveT || 0) + dt;
   if (AI.waveT < 9) return;
   AI.waveT = 0; AI.wave = (AI.wave || 1) + 1;
-  const n0 = Math.min(1 + AI.wave, 6), o = { hp: 3 + Math.min(AI.wave, 4), skill: Math.min(1, 0.4 + AI.wave * 0.12) };
+  if (st.acd.kind === 'heli' || AI.wave >= 3) heliGunships(Math.min(1 + Math.floor(AI.wave / 2) + (st.acd.kind === 'heli' ? 1 : 0), 5), Math.min(1, 0.4 + AI.wave * 0.1));   // enemy attack helicopters join in
+  const n0 = Math.min(2 + AI.wave, 8), o = { hp: 3 + Math.min(AI.wave, 4), skill: Math.min(1, 0.4 + AI.wave * 0.12) };
   let n = carrierLaunch(n0, o);   // every wave comes off the carrier's catapults
   if (!n && CFG.navy === false) { n = n0; const base = Math.random() * 6.283;
     for (let i = 0; i < n; i++) { const a = base + (i - (n - 1) / 2) * 0.35, r = 7000 + Math.random() * 1500, p = [st.pos[0] + Math.cos(a) * r, 0, st.pos[2] + Math.sin(a) * r];
