@@ -5089,7 +5089,7 @@ function apacheCues(g, VP, W, H) {
   if (s) { const r = 11; g.beginPath(); g.moveTo(s[0] - r * 2, s[1]); g.lineTo(s[0] - r, s[1]); g.moveTo(s[0] + r, s[1]); g.lineTo(s[0] + r * 2, s[1]); g.moveTo(s[0], s[1] - r * 2); g.lineTo(s[0], s[1] - r); g.moveTo(s[0], s[1] + r); g.lineTo(s[0], s[1] + r * 2); g.stroke();
     g.beginPath(); g.arc(s[0], s[1], 2, 0, 7); g.fill(); if (st.gunLimit) g.fillText('LIMIT', s[0], s[1] + 34); }
   if (st.gunTgt) { const t = P(st.gunTgt.p); if (t) { g.strokeRect(t[0] - 16, t[1] - 16, 32, 32); g.fillText(`${(V3.len(V3.sub(st.gunTgt.p, st.pos)) / 1000).toFixed(1)} km`, t[0], t[1] - 22); } }
-  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 14, H - 92);
+  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 74, H - 62);
   g.restore();
   return true;
 }
@@ -5125,7 +5125,7 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
     cp = clamp(c.pitch * 0.3 - pitchAng * 2.6 - w[2] * 1.3, -1, 1); cr = clamp(c.roll * 0.3 - rollAng * 2.2 - w[0] * 0.65, -1, 1);   // keep the disc level over the wheels
     py += st.engine ? (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK * 0.9 : 0; py += w[1] * 1.5;
   } else if (SIM.opt.assist) {
-    const hover = V < 9;
+    const hover = V < 9 && !st.hvrOff;
     // DASE, as in the real AH-64D. Stick movement commands a rotation rate (the way a SAS-damped helicopter responds to cyclic),
     // capped at what the Apache really does: ~30°/s in pitch, ~50°/s in roll, with a soft centre for fine control.
     // Let go and the Digital Automatic Stabilization Equipment takes over:
@@ -5169,6 +5169,7 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   }
   cp = clamp(cp, -1.2, 1.2); cr = clamp(cr, -1.2, 1.2); py = clamp(py, -1.6, 1.6);
   // ---- rotor disc: cyclic + blowback + rate lag, flapping with a short time constant ----
+  ah64AltStep(st, c, dt, agl);
   const th0 = R.TH0 + clamp(c.thr, 0, 1) * R.TH1;
   const n0 = [-Math.sin(st.tp) * Math.cos(st.tr), Math.cos(st.tp) * Math.cos(st.tr), Math.sin(st.tr)];
   const vn = V3.dot(vb, n0), vin = V3.sub(vb, V3.mul(n0, vn)), mu = V3.len(vin) / OR, lc = vn / OR;
@@ -5323,6 +5324,27 @@ function apacheIHADSS(g, W, H) {
   g.textAlign = 'center'; g.font = `600 ${Math.round(14 * s)}px Rajdhani, sans-serif`;
   if (st.vrs > 0.3) g.fillText('VORTEX RING', cx, cy + 110 * s); else if (tq > 100) g.fillText('TORQUE', cx, cy + 110 * s);
   g.restore();
+}
+
+// ---- DASE hold modes on buttons ----
+// ALT HOLD: works the collective to hold the radar altitude (barometric above 1,428 ft); move the collective to drop it
+function ah64AltHold() {
+  const st = SIM.st, c = SIM.ctl;
+  if (st.altHold != null) { st.altHold = null; ui.toast('ALT HOLD OFF', 'You have the collective'); return; }
+  if (!st.airborne) return ui.toast('ALT HOLD', 'Get airborne first');
+  const agl = st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h - 1.6;
+  st.altBaro = agl * FT > 1428; st.altHold = st.altBaro ? st.pos[1] : agl; st.ahBase = c.thr; st.ahI = 0; st.ahLast = c.thr;
+  ui.toast('ALT HOLD', (st.altBaro ? 'Barometric ' + Math.round(st.pos[1] * FT / 10) * 10 : 'Radar ' + Math.round(agl * FT)) + ' ft — move the collective to take over');
+}
+// HOVER HOLD: the hover position hold below 5 kt (on by default); off, the hover is yours, with just the rate damping
+function ah64HoverToggle() { const st = SIM.st; st.hvrOff = !st.hvrOff; ui.toast(st.hvrOff ? 'HOVER HOLD OFF' : 'HOVER HOLD ON', st.hvrOff ? 'You hold the hover; drift is yours to catch' : 'Holds you over the spot below 5 kt with the stick centred'); }
+function ah64AltStep(st, c, dt, agl) {
+  if (st.altHold == null) return;
+  if (st.ahLast != null && Math.abs(c.thr - st.ahLast) > 0.015) { st.altHold = null; ui.toast('ALT HOLD OFF', 'Collective moved — you have it'); updSet(); return; }
+  if (st.crashed || st.onGround) { st.altHold = null; updSet(); return; }
+  const e = st.altHold - (st.altBaro ? st.pos[1] : agl - 1.6), vs = st.vel[1];
+  st.ahI = clamp((st.ahI || 0) + e * 0.005 * dt, -0.2, 0.2);
+  c.thr = clamp(st.ahBase + clamp(e * 0.012, -0.12, 0.12) - vs * 0.05 + st.ahI, 0.05, 0.95); st.ahLast = c.thr;
 }
 
 // ===================== aircraft models (low-poly, original designs) =====================
@@ -11916,7 +11938,7 @@ function radioPick(who, ev) {
   used.push(i); if (used.length > Math.max(1, L.length - 1)) used.shift(); RADIO.used[k] = used;
   RADIO.pickI = i; return L[i];
 }
-function radioFill(s, c) { return s.replace(/\{(\w+)\}/g, (m, k) => c[k] != null ? c[k] : m); }
+function radioFill(s, c) { s = s.replace(/\{(\w+)\}/g, (m, k) => c[k] != null ? c[k] : m); return SIM.st && SIM.st.acd.kind === 'heli' ? s.replace(/\bthe plane\b/g, 'the helicopter').replace(/\bNice rotation\b/g, 'Nice lift-off').replace(/\brunway is yours\b/g, 'cleared for departure') : s; }
 // queue a line; pri 2 = urgent (warnings), 1 = normal, 0 = chatter (dropped if the radio is busy)
 function radio(who, ev, ctx = {}, pri = 1, keep = false) {   // keep: a story line — always scripted, never dropped for being late
   if (CFG.radio === false || !CAST[who]) return;
@@ -13117,6 +13139,8 @@ function updateHUD(dt) {
   $('pwr').style.color = st.lim && st.lim.red ? '#ff5a4a' : '';
   $('pwr').textContent = a.ah64 ? Math.round((st.torque || 0) * 100) + '%' : a.kind === 'heli' ? Math.round(c.thr * 100) + '%' : a.hyper || a.sr71 || a.f22 || a.f35 ? (st.mach || 0).toFixed(2) : a.vtol || a.airliner || a.b2 ? Math.round(st.rpm * 100) + '%' : Math.round(st.rpm * 2700);
   $('fuel').textContent = SIM.opt.infFuel ? '∞' : Math.round(st.fuel / a.fuelMax * 100) + '%';
+  if (st.altHold != null) updThr();
+  if (a.kind === 'heli' && $('ralt')) { const ra = Math.max(0, (st.pos[1] - surfaceAt(st.pos[0], st.pos[2]).h - 1.6) * FT); $('ralt').textContent = ra < 1428 ? (ra < 50 ? Math.round(ra) : Math.round(ra / 10) * 10) : '—'; }
   const pa = papiFor(), dots = $('papi').children;
   for (let i = 0; i < 4; i++) dots[i].style.background = !pa ? '#333' : pa.ang > [3.5, 3.17, 2.83, 2.5][i] ? '#fff' : '#ff3030';
   const sfc = surfaceAt(st.pos[0], st.pos[2]);
@@ -13131,7 +13155,7 @@ function updateHUD(dt) {
     if (st.abOn) w.push(st.rto ? 'RTO — MAX BRAKING' : 'AUTOBRAKE ' + AUTOBRAKE[c.abLvl || 0]);
   }
   wcamUI(); if (camMode === 'weapon' && st.crashed) wcamEnd();
-  { const fb = $('bFlare'), on = (AI.hostileOn || AI.inbound || NAVY.ships.some(s => s.seen > 0)) && !st.crashed; if ((fb.style.display !== 'none') !== on) fb.style.display = on ? '' : 'none'; $('bFlareV').textContent = CFG.unlimitedWpn ? 'FLARE ∞' : 'FLARE ' + AI.flareN; }
+  { const fb = $('bFlare'), on = (a.ah64 || AI.hostileOn || AI.inbound || NAVY.ships.some(s => s.seen > 0)) && !st.crashed; if ((fb.style.display !== 'none') !== on) fb.style.display = on ? '' : 'none'; $('bFlareV').textContent = CFG.unlimitedWpn ? 'FLARE ∞' : 'FLARE ' + AI.flareN; }
   if (AI.inbound && !st.crashed) w.push('MISSILE — FLARES, BREAK TURN');
   if (st.spin) w.push('SPIN — OPPOSITE RUDDER, STICK FORWARD');
   if (st.vrs > 0.3) w.push('VORTEX RING — FLY FORWARD');
@@ -13190,7 +13214,7 @@ function drawClouds(VP) {
   particlesDraw(VP, E, rt, upv, list, false, [1, 1, 1], R.fogDen * 0.22);
 }
 function rocketHUD(st, c) {
-  if (st.rk.ap.on) updThr();
+  if (st.rk.ap.on || st.altHold != null) updThr();
   const rk = st.rk, a = st.acd, sp = V3.len(st.vel), alt = st.pos[1];
   $('spd').textContent = Math.round(sp * 3.6);
   $('alt').previousElementSibling.textContent = alt > 10000 ? 'ALT KM' : 'ALT M';
@@ -13319,6 +13343,30 @@ function updStick() {
   k.style.top = (el.clientHeight / 2 - 18 - SIM.ctl.pitchT * inv() * r) + 'px';
 }
 function updRud() { const el = $('rud'), k = $('rudK'), w = el.clientWidth - 34; k.style.left = (2 + (SIM.ctl.yawT + 1) / 2 * w) + 'px'; }
+// helicopter cockpit layout: collective with a hover mark, cyclic AFT/FWD, the Apache's weapon names, radar altitude,
+// and the DASE hold buttons (altitude hold, hover hold) in place of flaps/gear
+function heliUI(a) {
+  const heli = a.kind === 'heli', ah = !!a.ah64;
+  $('thrLab').textContent = heli ? 'COLLECTIVE' : $('thrLab').textContent;
+  $('stT').textContent = heli ? 'AFT' : 'PULL'; $('stB').textContent = heli ? 'FWD' : 'PUSH';
+  $('bGun').firstElementChild.textContent = ah ? '30 MM' : 'GUN';
+  $('bMsl').firstElementChild.textContent = ah ? 'HELLFIRE' : 'MSL';
+  $('bBomb').firstElementChild.textContent = ah ? 'ROCKETS' : 'BOMB';
+  // radar altitude in place of the PAPI
+  let ra = $('raltG'); if (!ra) { const g = $('papi').parentElement; ra = document.createElement('div'); ra.className = 'g'; ra.id = 'raltG'; ra.innerHTML = '<small>RAD ALT</small><b id="ralt">0</b>'; g.after(ra); }
+  ra.style.display = heli ? '' : 'none'; $('papi').parentElement.style.display = heli ? 'none' : '';
+  // hover mark on the collective
+  let dm = $('heliDet'); if (!dm) { dm = document.createElement('div'); dm.id = 'heliDet'; dm.style.cssText = 'position:absolute;left:3px;right:3px;height:2px;background:#6fffa0;box-shadow:0 0 6px #6fffa0;pointer-events:none;border-radius:1px'; $('thr').appendChild(dm);
+    const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;left:calc(100% + 6px);top:-6px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
+  dm.style.display = ah ? '' : 'none'; if (ah) { const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - 0.44) * (H0 - 24) + 11) + 'px'; }
+  // DASE hold buttons
+  const mk = (id, label, svg) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam')); } return b; };
+  const bA = mk('bAltH', 'ALT HOLD', '<svg viewBox="0 0 24 24"><path d="M4 18h16M12 4v10M8 10l4 4 4-4"/></svg>');
+  const bH = mk('bHvr', 'HOVER HOLD', '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>');
+  bA.style.display = bH.style.display = ah ? '' : 'none';
+  if (ah) { const st = SIM.st; bA.classList.toggle('on', st.altHold != null); $('bAltHV').textContent = st.altHold != null ? 'ALT ' + Math.round(st.altHold * FT) + ' FT' : 'ALT HOLD';
+    bH.classList.toggle('on', st.hvrOff !== true); $('bHvrV').textContent = st.hvrOff ? 'HOVER OFF' : 'HOVER HOLD'; }
+}
 function updSet() {
   const a = SIM.st.acd, c = SIM.ctl;
   if (a.kind === 'rocket') { $('bSet').style.display = ''; $('bGear').style.display = ''; $('bBrk').style.display = 'none'; updRocketUI(); return; }
@@ -13331,8 +13379,9 @@ function updSet() {
       const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;right:4px;top:-13px;font:600 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px'; dm.appendChild(lb); }
     dm.style.display = on ? '' : 'none'; const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - a.stovl.det) * (H0 - 24) + 11) + 'px';
   } else if ($('thrDet')) $('thrDet').style.display = 'none';
+  heliUI(a);
   $('bGear').style.display = a.retract ? '' : 'none';
-  $('bBrk').style.display = a.kind === 'heli' ? 'none' : '';
+  $('bBrk').style.display = a.kind === 'heli' && !a.ah64 ? 'none' : '';
   $('bGearV').textContent = c.gearDown ? 'DOWN' : 'UP';
   $('bGear').classList.toggle('on', !c.gearDown);
 }
@@ -13407,7 +13456,7 @@ function bindControls() {
   tap('sReset', () => { spawn(false); $('sys').classList.remove('open'); });
   tap('sMixD', () => { SIM.ctl.mix = clamp(SIM.ctl.mix - 0.05, 0.3, 1); updSys(); });
   tap('sMixU', () => { SIM.ctl.mix = clamp(SIM.ctl.mix + 0.05, 0.3, 1); updSys(); });
-  tap('bFlare', dropFlares); tap('bWcam', wcamToggle);
+  tap('bFlare', dropFlares); tap('bAltH', () => { ah64AltHold(); updSet(); }); tap('bHvr', () => { ah64HoverToggle(); updSet(); }); tap('bWcam', wcamToggle);
   tap('sAB', () => { const c = SIM.ctl; c.abLvl = ((c.abLvl || 0) + 1) % AUTOBRAKE.length; SIM.st.abOff = false; SIM.ev.push({ t: 'click' }); updSys(); });
   tap('bRev', () => { const st = SIM.st, c = SIM.ctl;
     if (!c.rev && !st.onGround) { ui.toast('REVERSE', 'Only with the main wheels on the runway'); return; }
