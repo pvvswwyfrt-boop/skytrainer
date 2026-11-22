@@ -11730,8 +11730,8 @@ function campaignHTML() {
 // Voices: Claude voices where the page offers them, otherwise the device's speech voices (pitch / speed / accent per
 // character), with squelch clicks and static either side so it sounds like a radio.
 const CAST = {
-  tower:   { name: 'Miami Tower', who: 'Dolores', col: '#7fd8ff', voice: 'rounded', pitch: 0.95, rate: 1.06, accent: ['en-US'], vi: 0,
-             persona: 'Dolores, a sarcastic, world-weary veteran air traffic controller at Miami International. Dry wit, unimpressed, a little motherly, calls the pilot "hon" or "hotshot". Real ATC phrasing mixed with sarcasm.' },
+  tower:   { name: 'Miami Tower', who: 'Frank', col: '#7fd8ff', voice: 'buttery', pitch: 0.7, rate: 1.06, accent: ['en-US'], vi: 0,
+             persona: 'Frank, a sarcastic, world-weary veteran air traffic controller at Miami International, a deep-voiced ex-Marine. Dry wit, unimpressed, gruff and fatherly, calls the pilot "son" or "hotshot". Real ATC phrasing mixed with sarcasm.' },
   awacs:   { name: 'Overlord', who: 'AWACS', col: '#b7c4ff', voice: 'glassy', pitch: 0.85, rate: 1.12, accent: ['en-GB', 'en-US'], vi: 1,
              persona: 'Overlord, an AWACS controller. Calm, clipped, ultra-professional military brevity: bearings, ranges, "bandit", "splash", "picture". Never jokes.' },
   viper:   { name: 'Viper', who: 'bandit lead', col: '#ff5a4a', voice: 'glassy', pitch: 0.55, rate: 0.88, accent: ['en-GB', 'ru-RU', 'en-US'], vi: 2,
@@ -11913,8 +11913,13 @@ function radioVoices() {
   const all = speechSynthesis.getVoices(); if (!all.length) return null;
   const en = all.filter(v => /^en/i.test(v.lang)); RV = { all, en: en.length ? en : all }; return RV;
 }
+const MALE_V = /daniel|fred|alex|aaron|arthur|gordon|rishi|tom\b|evan|nathan|oliver|reed|rocko|eddy|grandpa|ralph|albert|bruce|junior|lee\b|thomas|james|david|guy|mark|george|ryan|male/i;
+const FEMALE_V = /samantha|karen|moira|tessa|victoria|fiona|kate|serena|allison|ava|susan|zoe|nicky|siri female|female|martha|catherine|veena|joanna|kimberly|salli|ivy|emma|amy|hazel|zira|aria|jenny|libby|sonia|natasha|shelley|sandy|flo\b|grandma/i;
 function radioVoiceFor(ch) {
   const V = radioVoices(); if (!V) return null;
+  // every voice in the game is a man's: pick male system voices by name, never a known female one
+  const male = V.all.filter(v => /^en/i.test(v.lang) && MALE_V.test(v.name) && !FEMALE_V.test(v.name));
+  if (male.length) { for (const acc of ch.accent) { const m = male.filter(v => v.lang.replace('_', '-').toLowerCase().startsWith(acc.toLowerCase())); if (m.length) return m[ch.vi % m.length]; } return male[ch.vi % male.length]; }
   for (const acc of ch.accent) { const m = V.all.filter(v => v.lang && v.lang.replace('_', '-').toLowerCase().startsWith(acc.toLowerCase())); if (m.length) return m[ch.vi % m.length]; }
   return V.en[ch.vi % V.en.length];
 }
@@ -11927,7 +11932,7 @@ function radioSpeak(line) {
   if (RADIO.tts) { RADIO.tts.speak(line.text, { voice: ch.voice, rate: clamp(ch.rate, 0.7, 1.5), language: 'en' }).then(done, done); return; }
   if (typeof speechSynthesis !== 'undefined') {
     try { const u = new SpeechSynthesisUtterance(line.text), v = radioVoiceFor(ch); if (v) { u.voice = v; u.lang = v.lang; }
-      u.pitch = ch.pitch; u.rate = ch.rate; u.volume = 1; u.onend = done; u.onerror = done; speechSynthesis.speak(u);
+      u.pitch = v && MALE_V.test(v.name) ? ch.pitch : Math.min(ch.pitch, 0.6); u.rate = ch.rate; u.volume = 1; u.onend = done; u.onerror = done; speechSynthesis.speak(u);
       setTimeout(done, 1800 + line.text.length * 90 / ch.rate); return; } catch (e) {}
   }
   setTimeout(done, 400 + line.text.length * 45);
