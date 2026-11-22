@@ -5189,7 +5189,8 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   const ctsMax = 0.2 - 0.25 * mu * mu, cts = CT / R.SIG;
   let stall = cts > ctsMax ? Math.min(1, (cts - ctsMax) / 0.05) : 0;
   // retreating-blade stall approaching Vne (197 kt, advance ratio ~0.45): vibration builds from ~170 kt
-  const rbs = clamp((mu - 0.38) / 0.08, 0, 1.5) * (CT > 0.004 ? 1 : 0.5);
+  const easy = CFG.heliEasy !== false;
+  const rbs = easy ? 0 : clamp((mu - 0.38) / 0.08, 0, 1.5) * (CT > 0.004 ? 1 : 0.5);   // EASY: no retreating-blade stall
   stall = Math.max(stall, rbs * 0.7);
   if (cts > ctsMax) T = rho * R.A * OR * OR * R.SIG * ctsMax * kge * rotorOK;
   if (stall > 0 && rotorOK) { M[2] += 26000 * stall; M[0] -= 22000 * stall; SIM.shake = Math.max(SIM.shake || 0, 0.35 * stall); }
@@ -5221,16 +5222,17 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   const Ttr = boomOK * rr * (rho / 1.225) * (R.TR0 - R.TRK * py) - w[1] * 2100 * boomOK;   // yawing changes the tail rotor's inflow: yaw damping
   const Ptr = Math.pow(Math.abs(Ttr), 1.5) / Math.sqrt(2 * rho * R.ATR) + 30000 * rr * st.nr;
   const Preq = Pm + Ptr * boomOK + 40000 * rr;
-  const Pav = R.PMAX * Math.pow(rho / 1.225, 0.75) * (st.oei ? 0.64 : 1) * st.pwr;
+  const Pmx = R.PMAX * (CFG.heliEasy !== false ? 1.6 : 1);   // EASY: souped-up engines
+  const Pav = Pmx * Math.pow(rho / 1.225, 0.75) * (st.oei ? 0.64 : 1) * st.pwr;
   const Peng = st.engine && !starting ? clamp(Preq + 3.3e7 * (1 - st.nr), 0, Pav) : 0;
   if (!starting) st.nr = clamp(st.nr + (Peng - Preq) / (R.IR * om * R.OM) * dt, 0, 1.15);
-  st.rpm = st.nr; st.torque = Math.max(0, Preq) / R.PMAX; st.qm = Pm / om; st.power = Preq;
+  st.rpm = st.nr; st.torque = Math.max(0, Preq) / Pmx; st.qm = Pm / om; st.power = Preq;
   // main-rotor torque turns the fuselage the other way (nose right; nose left in autorotation)
   M[1] -= st.qm;
   // tail rotor: on the left of the fin, pushing the tail right; also pushes the aircraft right (translating tendency)
   F[2] += Ttr; M[0] += R.TR[1] * Ttr; M[1] += -R.TR[0] * Ttr;
   // ---- fuselage, stabilator and fin ----
-  F[0] -= 0.5 * rho * a.CDA[0] * V * vb[0]; F[1] -= 0.5 * rho * a.CDA[1] * V * vb[1]; F[2] -= 0.5 * rho * a.CDA[2] * V * vb[2];
+  F[0] -= 0.5 * rho * a.CDA[0] * (CFG.heliEasy !== false ? (st.ez && st.ez.brake ? 1.6 : 0.45) : 1) * V * vb[0];   // EASY: slicker airframe F[1] -= 0.5 * rho * a.CDA[1] * V * vb[1]; F[2] -= 0.5 * rho * a.CDA[2] * V * vb[2];
   const q = 0.5 * rho * V * V, fwd = clamp((vb[0] - 6) / 10, 0, 1);
   if (fwd > 0) {
     const al = Math.atan2(-vb[1], vb[0]), be = Math.atan2(vb[2], vb[0]);
@@ -5375,18 +5377,20 @@ function ah64Easy(st, c, dt, agl, rollAng, pitchAng, V, grounded) {
   if (grounded && t < 0.47) { E.cI = 0.42; thr = t < 0.3 ? t * 0.6 : 0.25; E.uI = E.vI = E.yI = E.pI = E.rI = 0; }
   else {
     const e = vsCmd - vs;
-    E.cI = clamp(E.cI + e * 0.06 * dt, 0.2, 0.85);
+    E.cI = clamp(E.cI + e * 0.06 * dt, 0.0, 0.85);
     if ((st.torque || 0) > 0.99) E.cI -= ((st.torque || 0) - 0.99) * 2 * dt;   // never pull past the torque limit
     thr = clamp(E.cI + e * 0.08 + (1 / Math.max(0.6, Math.cos(rollAng) * Math.cos(pitchAng)) - 1) * 0.5, 0, 1);
     if ((st.torque || 0) > 1.0) thr = Math.min(thr, (st.coll || thr) - 0.002);
   }
   // ---- horizontal: stick = wanted speed ----
   const sp = -c.pitch, fast = clamp((Math.abs(u) - 12) / 15, 0, 1);
-  let uCmd = sp > 0 ? ex(sp) * 82 : ex(sp) * 12;
+  let uCmd = sp > 0 ? ex(sp) * 130 : ex(sp) * 12;   // full stick: ~250 kt
   if (Math.abs(c.pitchT) < 0.05 && Math.abs(c.roll) > 0.1 && fast > 0.5) uCmd = E.uHold ?? u; else E.uHold = Math.max(uCmd, 0) > 0 ? u : uCmd;   // turning with the stick only sideways: keep your speed
   const vCmd = ex(c.roll) * 12 * (1 - fast);
   E.uI = clamp(E.uI + (uCmd - u) * 0.0015 * dt, -0.08, 0.08); E.vI = clamp(E.vI + (vCmd - v) * 0.002 * dt, -0.06, 0.06);
-  let pT = clamp(-0.0021 * u - (uCmd - u) * 0.018 - E.uI, -0.3, 0.22);
+  let pT = clamp(-0.0021 * u - (uCmd - u) * 0.02 - E.uI, -0.36, 0.22 - 0.12 * fast);   // flares gently at speed so it doesn't balloon
+  E.brake = fast > 0.5 && uCmd < u - 15;   // slowing down from speed: the airframe 'brakes' (EASY only)
+  if (fast > 0) pT = clamp(pT - fast * clamp((vs - vsCmd) * 0.02, -0.08, 0.2), -0.36, 0.22);   // at speed the nose also holds the height: a flare that starts to climb gets lowered
   let rT = (1 - fast) * clamp((vCmd - v) * 0.035 + E.vI, -0.3, 0.3) + fast * ex(c.roll) * 0.62;
   if (grounded) { pT = 0; rT = 0; }
   // attitude -> rate -> cyclic (with the blowback feed-forward)
@@ -8078,7 +8082,7 @@ function makeDebris(st, name, extraV = 0) {
 function checkLimits(st, a, dt) {
   const L = a.limits, kias = st.ias * KT;
   st.gS = (st.gS == null ? 1 : st.gS) + (st.g - (st.gS == null ? 1 : st.gS)) * Math.min(1, dt / 0.08);
-  const vne = L.vne * (st.rkt && st.rkt.used ? 1.6 : 1);
+  const vne = L.vne * (st.rkt && st.rkt.used ? 1.6 : 1) * (a.ah64 && CFG.heliEasy !== false ? 1.45 : 1);
   st.lim = { vne: kias > vne, flap: false, overG: st.gS > L.gMax || st.gS < L.gMin, red: a.prop && st.rpm * a.prop.rpm > L.rpmRed + 15 };
   const touching = st.contacts.some(Boolean); st.gndT = touching ? 0.6 : Math.max(0, (st.gndT || 0) - dt);
   if (st.gndT > 0) st.lim.overG = false;          // landing loads are the gear's business, not the wing's
