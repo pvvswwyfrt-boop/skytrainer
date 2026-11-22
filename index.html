@@ -5167,10 +5167,12 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
     if (Math.abs(c.yawT) < 0.05 && !(Math.abs(rollAng) > 1.4 || Math.abs(pitchAng) > 1.0)) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 3.0 * Math.min(1, (V - 12) / 15); }
     else st.yI *= 1 - dt;
   }
+  let thrEff = c.thr;
+  if (CFG.heliEasy !== false && !(st.crashed)) { const e = ah64Easy(st, c, dt, agl, rollAng, pitchAng, V, grounded); cp = e.cp; cr = e.cr; py = e.py; thrEff = e.thr; }
   cp = clamp(cp, -1.2, 1.2); cr = clamp(cr, -1.2, 1.2); py = clamp(py, -1.6, 1.6);
   // ---- rotor disc: cyclic + blowback + rate lag, flapping with a short time constant ----
-  ah64AltStep(st, c, dt, agl);
-  const th0 = R.TH0 + clamp(c.thr, 0, 1) * R.TH1;
+  if (CFG.heliEasy === false) ah64AltStep(st, c, dt, agl);
+  const th0 = R.TH0 + clamp(thrEff, 0, 1) * R.TH1; st.coll = thrEff;
   const n0 = [-Math.sin(st.tp) * Math.cos(st.tr), Math.cos(st.tp) * Math.cos(st.tr), Math.sin(st.tr)];
   const vn = V3.dot(vb, n0), vin = V3.sub(vb, V3.mul(n0, vn)), mu = V3.len(vin) / OR, lc = vn / OR;
   // inflow: momentum theory, a few damped fixed-point passes from last step's answer
@@ -5345,6 +5347,67 @@ function ah64AltStep(st, c, dt, agl) {
   const e = st.altHold - (st.altBaro ? st.pos[1] : agl - 1.6), vs = st.vel[1];
   st.ahI = clamp((st.ahI || 0) + e * 0.005 * dt, -0.2, 0.2);
   c.thr = clamp(st.ahBase + clamp(e * 0.012, -0.12, 0.12) - vs * 0.05 + st.ahI, 0.05, 0.95); st.ahLast = c.thr;
+}
+
+// ===================== EASY mode (default) =====================
+// Flies like a camera drone on top of the full rotor physics: the computer works the real cyclic, collective and pedals.
+//  · stick forward/back = how fast you want to go (up to ~155 kt forward, a little backwards); let go and it slows to a hover
+//  · stick left/right = slide sideways in the hover; at speed, bank and turn (the nose follows the turn by itself)
+//  · collective = climb or descend (the HOLD mark holds your height); it never over-torques, won't sink into the vortex ring,
+//    and slows the descent by itself for a soft touchdown
+//  · pedals = turn on the spot; let go and the heading holds
+//  · let go upside down and it rolls upright and levels
+function ah64Easy(st, c, dt, agl, rollAng, pitchAng, V, grounded) {
+  const R = AHR, w = st.w, h = agl - 1.6;
+  const ex = x => Math.sign(x) * (0.35 * Math.abs(x) + 0.65 * Math.pow(Math.abs(x), 1.8));
+  const fw = Q.rot(st.q, [1, 0, 0]), rw = Q.rot(st.q, [0, 0, 1]);
+  const fl = Math.hypot(fw[0], fw[2]) || 1, fx = fw[0] / fl, fz = fw[2] / fl, rl = Math.hypot(rw[0], rw[2]) || 1, rx = rw[0] / rl, rz = rw[2] / rl;
+  const u = st.vel[0] * fx + st.vel[2] * fz, v = st.vel[0] * rx + st.vel[2] * rz, vs = st.vel[1];
+  if (!st.ez) st.ez = { uI: 0, vI: 0, cI: 0.44, yI: 0, pI: 0, rI: 0 };
+  const E = st.ez;
+  // ---- vertical: collective slider = climb rate ----
+  const t = clamp(c.thr, 0, 1);
+  let vsCmd = t >= 0.45 ? (t - 0.45) / 0.55 * 10.2 : (t - 0.45) / 0.45 * 7.6;   // +2,000 / -1,500 ft/min
+  if (Math.abs(t - 0.45) < 0.025 && !grounded) { if (E.hT == null) E.hT = h; vsCmd = clamp((E.hT - h) * 0.5, -3, 3); } else E.hT = null;   // on the HOLD mark: hold this height
+  if (V < 12) vsCmd = Math.max(vsCmd, -3.5);   // no vortex ring
+  if (vsCmd < 0) vsCmd = Math.max(vsCmd, -0.5 - Math.max(0, h) * 0.22);   // eases off near the ground: soft landings
+  let thr;
+  if (grounded && t < 0.47) { E.cI = 0.42; thr = t < 0.3 ? t * 0.6 : 0.25; E.uI = E.vI = E.yI = E.pI = E.rI = 0; }
+  else {
+    const e = vsCmd - vs;
+    E.cI = clamp(E.cI + e * 0.06 * dt, 0.2, 0.85);
+    if ((st.torque || 0) > 0.99) E.cI -= ((st.torque || 0) - 0.99) * 2 * dt;   // never pull past the torque limit
+    thr = clamp(E.cI + e * 0.08 + (1 / Math.max(0.6, Math.cos(rollAng) * Math.cos(pitchAng)) - 1) * 0.5, 0, 1);
+    if ((st.torque || 0) > 1.0) thr = Math.min(thr, (st.coll || thr) - 0.002);
+  }
+  // ---- horizontal: stick = wanted speed ----
+  const sp = -c.pitch, fast = clamp((Math.abs(u) - 12) / 15, 0, 1);
+  let uCmd = sp > 0 ? ex(sp) * 82 : ex(sp) * 12;
+  if (Math.abs(c.pitchT) < 0.05 && Math.abs(c.roll) > 0.1 && fast > 0.5) uCmd = E.uHold ?? u; else E.uHold = Math.max(uCmd, 0) > 0 ? u : uCmd;   // turning with the stick only sideways: keep your speed
+  const vCmd = ex(c.roll) * 12 * (1 - fast);
+  E.uI = clamp(E.uI + (uCmd - u) * 0.0015 * dt, -0.08, 0.08); E.vI = clamp(E.vI + (vCmd - v) * 0.002 * dt, -0.06, 0.06);
+  let pT = clamp(-0.0021 * u - (uCmd - u) * 0.018 - E.uI, -0.3, 0.22);
+  let rT = (1 - fast) * clamp((vCmd - v) * 0.035 + E.vI, -0.3, 0.3) + fast * ex(c.roll) * 0.62;
+  if (grounded) { pT = 0; rT = 0; }
+  // attitude -> rate -> cyclic (with the blowback feed-forward)
+  let qd = clamp((pT - pitchAng) * 2.4, -0.5, 0.5), pd = clamp((rT - rollAng) * 2.6, -1.0, 1.0);
+  if (Math.abs(rollAng) > 1.4) { pd = clamp(-rollAng * 2.2, -1.4, 1.4); qd = 0; }   // upside down: roll upright first
+  const eq = qd - w[2], epr = pd - w[0];
+  E.pI = clamp(E.pI + eq * 1.6 * dt, -0.5, 0.5); E.rI = clamp(E.rI + epr * 2.0 * dt, -0.5, 0.5);
+  const cp = clamp(eq * 1.7 + E.pI - (st.bbP || 0) / R.CYCP, -1.2, 1.2), cr = clamp(epr * 0.9 + E.rI + (st.bbR || 0) / R.CYCR, -1.2, 1.2);
+  // ---- yaw: pedals = turn rate, heading holds, the nose follows a banked turn ----
+  let rDes = -ex(c.yaw) * 0.8;
+  if (fast > 0) rDes -= fast * GRAV * Math.tan(clamp(rollAng, -1, 1)) / Math.max(Math.abs(u), 12);
+  const ey = w[1] - rDes;
+  if (Math.abs(c.yaw) < 0.05) E.yI = clamp(E.yI + ey * 1.2 * dt, -0.6, 0.6); else E.yI *= 1 - dt;
+  let py = (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK * 0.9 + ey * 2.6 + E.yI;
+  if (fast > 0 && V > 5) py += fast * Math.atan2(Q.inv(st.q, st.vel)[2], Math.max(1, Q.inv(st.q, st.vel)[0])) * 3;
+  if (grounded) py += c.yaw * 0.5;
+  return { cp, cr, py: clamp(py, -1.6, 1.6), thr };
+}
+function heliModeToggle() {
+  CFG.heliEasy = CFG.heliEasy === false; saveCFG(); const st = SIM.st; st.ez = null; st.altHold = null;
+  ui.toast(CFG.heliEasy ? 'EASY FLYING' : 'REAL APACHE', CFG.heliEasy ? 'Stick = speed and direction, let go to hover. Collective = climb / hold / descend' : 'Full AH-64D handling with DASE: collective is collective, stick is cyclic');
 }
 
 // ===================== aircraft models (low-poly, original designs) =====================
@@ -6429,7 +6492,7 @@ const AC = {
       { p: [-0.3, -0.35, 2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }, { p: [-0.3, -0.35, -2.9], piece: 'fuse', kind: 'fuse', n: 'Stub wing' }],
     limits: { vne: 197, vfe: [0], gMax: 3.5, gMin: -0.5 },   /* AH-64D: Vne 197 kt, +3.5 / -0.5 g */
     collapse: 5.2, camDist: 24, airSpawn: 35, airThr: 0.44,   /* crashworthy gear: takes a ~1,000 fpm arrival; past that it strokes and breaks */
-    tips: 'Collective (left slider) to about 45% to hover; the TORQUE gauge shows how much of the engines you are using: past 100% the rotor droops. Push the cyclic to tilt the rotor and fly forward; pedals work the tail rotor. Feel the shudder through translational lift at 15 kt, and never sink fast with no airspeed: that is the vortex ring. GUN fires the 30 mm cannon: in the cockpit it points where you look, from outside it follows the nose, and the sight snaps onto a target near the crosshair (green box). MSL fires a Hellfire at the boxed target; BOMB fires a pair of Hydra rockets straight ahead.',
+    tips: 'EASY mode (default): push the collective above the HOLD mark to climb, below it to descend, on the mark to hold your height. The stick sets your speed and direction: push to fly forward, let go and it slows to a hover; left/right slides you sideways, or banks into a turn at speed. Pedals turn on the spot. Tap EASY to switch to REAL for the full Apache. GUN aims where you look (cockpit) or ahead; HELLFIRE fires at the boxed target; ROCKETS fires a pair straight ahead.',
     help: 'The AH-64D Apache Longbow: two General Electric T700-GE-701C turboshafts of 1,890 shp, a 14.6 m four-blade main rotor, a four-blade tail rotor set in a non-orthogonal X, and the Longbow fire-control radar on top of the mast. Never-exceed 197 kt, cruise about 143 kt, climb about 2,500 ft/min, ceiling 21,000 ft. The M230 chain gun under the nose fires 30 mm rounds at 625 a minute from a 1,200-round magazine; in the real helicopter it belongs to the front-seat co-pilot/gunner, here you fly and fight. 8 AGM-114 Hellfires on the inner pylons, two 19-shot Hydra 70 rocket pods outside. 3D model: “Boeing AH-64D Apache Combat Helicopter” by Muhamad Mirza Arrafi (CC BY 4.0).',
   },  exec: {
     key: 'exec', name: 'Twin Heli', sub: 'Medium twin, rescue / VIP', kind: 'heli', build: () => buildExec(CFG.livery), liveries: [['rescue', 'Rescue'], ['exec', 'Executive']],
@@ -13363,7 +13426,12 @@ function heliUI(a) {
   const mk = (id, label, svg) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam')); } return b; };
   const bA = mk('bAltH', 'ALT HOLD', '<svg viewBox="0 0 24 24"><path d="M4 18h16M12 4v10M8 10l4 4 4-4"/></svg>');
   const bH = mk('bHvr', 'HOVER HOLD', '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>');
-  bA.style.display = bH.style.display = ah ? '' : 'none';
+  const easy = ah && CFG.heliEasy !== false;
+  const bM = mk('bMode', 'EASY', '<svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>');
+  bM.style.display = ah ? '' : 'none'; $('bModeV').textContent = easy ? 'EASY' : 'REAL'; bM.classList.toggle('on', !easy);
+  bA.style.display = bH.style.display = ah && !easy ? '' : 'none';
+  if (dm.firstChild) dm.firstChild.textContent = easy ? 'HOLD' : 'HOVER';
+  if (easy) $('thrLab').textContent = 'UP · DOWN';
   if (ah) { const st = SIM.st; bA.classList.toggle('on', st.altHold != null); $('bAltHV').textContent = st.altHold != null ? 'ALT ' + Math.round(st.altHold * FT) + ' FT' : 'ALT HOLD';
     bH.classList.toggle('on', st.hvrOff !== true); $('bHvrV').textContent = st.hvrOff ? 'HOVER OFF' : 'HOVER HOLD'; }
 }
@@ -13456,7 +13524,7 @@ function bindControls() {
   tap('sReset', () => { spawn(false); $('sys').classList.remove('open'); });
   tap('sMixD', () => { SIM.ctl.mix = clamp(SIM.ctl.mix - 0.05, 0.3, 1); updSys(); });
   tap('sMixU', () => { SIM.ctl.mix = clamp(SIM.ctl.mix + 0.05, 0.3, 1); updSys(); });
-  tap('bFlare', dropFlares); tap('bAltH', () => { ah64AltHold(); updSet(); }); tap('bHvr', () => { ah64HoverToggle(); updSet(); }); tap('bWcam', wcamToggle);
+  tap('bFlare', dropFlares); tap('bAltH', () => { ah64AltHold(); updSet(); }); tap('bMode', () => { heliModeToggle(); updSet(); }); tap('bHvr', () => { ah64HoverToggle(); updSet(); }); tap('bWcam', wcamToggle);
   tap('sAB', () => { const c = SIM.ctl; c.abLvl = ((c.abLvl || 0) + 1) % AUTOBRAKE.length; SIM.st.abOff = false; SIM.ev.push({ t: 'click' }); updSys(); });
   tap('bRev', () => { const st = SIM.st, c = SIM.ctl;
     if (!c.rev && !st.onGround) { ui.toast('REVERSE', 'Only with the main wheels on the runway'); return; }
