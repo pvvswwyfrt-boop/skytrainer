@@ -5130,20 +5130,23 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
     if (st.holdP === undefined) st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25);
     if (Math.abs(c.pitchT) < 0.05) {
       if (st.pTouch) { st.pTouch = false; st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25); }
-      if (hover) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.035 + st.hiX, -0.14, 0.14) - st.holdP) * Math.min(1, dt * 2); }
+      if (hover) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.03 + st.hiX, -0.09, 0.09) - st.holdP) * Math.min(1, dt * 2); }
     } else if (!st.pTouch) { st.pTouch = true; if (hover) st.holdP = 0; }
     const pT = clamp(st.holdP + (st.pTouch ? c.pitch * 0.33 : 0), -0.5, 0.4);
     let rT = Math.abs(c.rollT) < 0.05 ? 0 : c.roll * 0.62;
-    if (Math.abs(c.rollT) < 0.05 && hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.08, 0.08); rT = clamp(-vgb[2] * 0.035 + st.hiZ, -0.14, 0.14); }
+    if (Math.abs(c.rollT) < 0.05 && hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.05, 0.05); rT = clamp(-vgb[2] * 0.03 + st.hiZ, -0.09, 0.09); }
     const ep = pT - pitchAng, er = rT - rollAng;
-    st.pI = clamp((st.pI || 0) + ep * 1.2 * dt, -0.5, 0.5); st.rI = clamp((st.rI || 0) + er * 1.5 * dt, -0.5, 0.5);   // trims out the steady moments (tail-rotor roll, stabilator)
+    // integrators trim out steady moments while holding; frozen while you're manoeuvring so they can't wind up and overshoot on release
+    if (Math.abs(ep) < 0.1) st.pI = clamp((st.pI || 0) + ep * 1.2 * dt, -0.3, 0.3);
+    if (Math.abs(er) < 0.1) st.rI = clamp((st.rI || 0) + er * 1.5 * dt, -0.3, 0.3);
     if (st.onGround) { st.pI *= 1 - dt * 2; st.rI *= 1 - dt * 2; }
-    cp = clamp(ep * 2.6 + st.pI - w[2] * 1.3, -1.1, 1.1);
-    cr = clamp(er * 2.2 + st.rI - w[0] * 0.65, -1.1, 1.1);
+    // feed-forward: cancel the disc's blowback with airspeed so the attitude holds as you speed up and slow down
+    cp = clamp(ep * 2.6 + st.pI - w[2] * 1.3 - (st.bbP || 0) / R.CYCP, -1.1, 1.1);
+    cr = clamp(er * 2.0 + st.rI - w[0] * 0.95 + (st.bbR || 0) / R.CYCR, -1.1, 1.1);
     // pedals: cancel the change in rotor torque, hold heading when your feet are off, coordinate turns at speed
     const need = (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK;
     py += st.engine ? need * 0.9 : 0;
-    if (Math.abs(c.yawT) < 0.05) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 1.4 * Math.min(1, (V - 12) / 15); }
+    if (Math.abs(c.yawT) < 0.05) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 3.0 * Math.min(1, (V - 12) / 15); }
     else st.yI *= 1 - dt;
   }
   cp = clamp(cp, -1.2, 1.2); cr = clamp(cr, -1.2, 1.2); py = clamp(py, -1.6, 1.6);
@@ -5166,11 +5169,14 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   if (vinS > 4 && vinS < 11 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, 0.08 * Math.sin((vinS - 4) / 7 * Math.PI));   // the shudder through translational lift
   // disc tilt targets
   const kb = clamp(2 * (4 / 3 * th0 - lam) / (1 - mu * mu / 2), -0.4, 0.8), tauF = 16 / (R.GAM * om);
-  let tp = cp * R.CYCP + kb * vin[0] / OR - w[2] * tauF, tr = cr * R.CYCR - kb * vin[2] / OR - w[0] * tauF;
-  tr += 0.035 * Math.exp(-Math.pow((vinS - 8) / 4, 2)) * (vin[0] > 0 ? 1 : 0);   // transverse-flow roll to the right in transition
+  st.bbP = kb * vin[0] / OR; st.bbR = kb * vin[2] / OR;
+  let tp = cp * R.CYCP + st.bbP - w[2] * tauF, tr = cr * R.CYCR - st.bbR - w[0] * tauF;
+  if (!SIM.opt.assist) tr += 0.035 * Math.exp(-Math.pow((vinS - 8) / 4, 2)) * (vin[0] > 0 ? 1 : 0);   // transverse-flow roll to the right in transition (the assist trims it out)
   const fl = Math.min(1, dt / 0.05);
   st.tp = clamp(st.tp + (tp - st.tp) * fl, -0.28, 0.28); st.tr = clamp(st.tr + (tr - st.tr) * fl, -0.24, 0.24);
-  const n = V3.norm([-Math.sin(st.tp) * Math.cos(st.tr), Math.cos(st.tp) * Math.cos(st.tr), Math.sin(st.tr)]);
+  // the mast is canted slightly left so the rotor's thrust cancels the tail rotor's push: the Apache hovers wings-level
+  const trm = st.tr - 0.058 * rr;
+  const n = V3.norm([-Math.sin(st.tp) * Math.cos(trm), Math.cos(st.tp) * Math.cos(trm), Math.sin(trm)]);
   // ---- forces and moments: rotor thrust through the hub, hub stiffness ----
   const Fr = V3.mul(n, T), H = R.HUB;
   F[0] += Fr[0]; F[1] += Fr[1]; F[2] += Fr[2];
@@ -6360,8 +6366,8 @@ const AC = {
     spool: 0.4, startTime: 12,
     weapons: { m: [[-0.04, -0.71, -1.98], [-0.04, -1.06, -1.95], [-0.04, -1.06, -1.65], [-0.04, -0.71, -1.62], [-0.04, -0.69, 1.68], [-0.04, -1.06, 1.71], [-0.04, -1.05, 2.0], [-0.04, -0.7, 2.04]], b: [] },
     gear: [
-      { p: [0.67, -1.64, 0.97], k: 160000, c: 16000, brake: true, piece: 'gear' }, { p: [0.67, -1.64, -0.97], k: 160000, c: 16000, brake: true, piece: 'gear' },
-      { p: [-10.6, -1.64, 0], k: 60000, c: 6000, piece: 'gear', steer: true }],   // the tail wheel swivels
+      { p: [0.66, -1.61, 0.97], k: 600000, c: 52000, brake: true, piece: 'gear' }, { p: [0.66, -1.61, -0.92], k: 600000, c: 52000, brake: true, piece: 'gear' },   /* stiff oleos, wheel centres measured off the model */
+      { p: [-10.6, -1.63, 0.025], k: 220000, c: 9000, piece: 'gear', steer: true }],   // the tail wheel swivels
     hard: [
       { p: [-11.0, 1.4, -0.74], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' }, { p: [-11.0, 2.3, 0], piece: 'boom', kind: 'trotor', n: 'Tail rotor strike' },
       { p: [7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' }, { p: [-7.2, 2.04, 0], piece: 'rotor', kind: 'rotor', n: 'Main rotor strike' },
