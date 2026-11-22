@@ -5125,28 +5125,38 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
     py += st.engine ? (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK * 0.9 : 0; py += w[1] * 1.5;
   } else if (SIM.opt.assist) {
     const hover = V < 9;
-    // attitude command / attitude hold: the stick asks for a pitch and bank angle, the cyclic is worked to give it.
-    // Let go and it holds the attitude you left it in (in the hover, it holds the hover and kills any drift)
-    if (st.holdP === undefined) st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25);
-    if (Math.abs(c.pitchT) < 0.05) {
-      if (st.pTouch) { st.pTouch = false; st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.25); }
+    // rate command / attitude hold (the scheme fly-by-wire aircraft use):
+    //  · stick moves = the aircraft rotates at a rate set by how far you push (up to 60°/s pitch, 100°/s roll), with a soft
+    //    centre so small inputs are fine. Hold it and it keeps going round: loops, rolls, wingovers
+    //  · let go in normal flight and it holds that attitude (wings level if you were under 60° of bank); in the hover it
+    //    holds the hover and kills drift. Let go upside down or nose-high and it rolls upright the short way and levels the nose
+    const ex = x => Math.sign(x) * (0.35 * Math.abs(x) + 0.65 * Math.pow(Math.abs(x), 1.8));
+    const pT0 = Math.abs(c.pitchT) >= 0.05, rT0 = Math.abs(c.rollT) >= 0.05;
+    const normal = Math.abs(rollAng) < 1.05 && Math.abs(pitchAng) < 0.75;
+    if (st.holdP === undefined) st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.3);
+    let qd, pd;   // wanted pitch and roll rates, rad/s
+    if (pT0) { st.pTouch = true; qd = ex(c.pitch) * 1.2; }
+    else {
+      if (st.pTouch) { st.pTouch = false; st.holdP = hover ? 0 : clamp(pitchAng, -0.35, 0.3); }
       if (hover) { st.hiX = clamp(st.hiX + vgb[0] * 0.012 * dt, -0.06, 0.06); st.holdP += (clamp(vgb[0] * 0.03 + st.hiX, -0.09, 0.09) - st.holdP) * Math.min(1, dt * 2); }
-    } else if (!st.pTouch) { st.pTouch = true; if (hover) st.holdP = 0; }
-    const pT = clamp(st.holdP + (st.pTouch ? c.pitch * 0.33 : 0), -0.5, 0.4);
-    let rT = Math.abs(c.rollT) < 0.05 ? 0 : c.roll * 0.62;
-    if (Math.abs(c.rollT) < 0.05 && hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.05, 0.05); rT = clamp(-vgb[2] * 0.03 + st.hiZ, -0.09, 0.09); }
-    const ep = pT - pitchAng, er = rT - rollAng;
-    // integrators trim out steady moments while holding; frozen while you're manoeuvring so they can't wind up and overshoot on release
-    if (Math.abs(ep) < 0.1) st.pI = clamp((st.pI || 0) + ep * 1.2 * dt, -0.3, 0.3);
-    if (Math.abs(er) < 0.1) st.rI = clamp((st.rI || 0) + er * 1.5 * dt, -0.3, 0.3);
+      qd = normal ? clamp((st.holdP - pitchAng) * 2.2, -0.7, 0.7) : !rT0 && Math.abs(rollAng) < 1.4 ? clamp(-pitchAng * 1.5, -0.8, 0.8) : 0;   // past the envelope: bring the nose back to the horizon once upright
+    }
+    if (rT0) pd = ex(c.roll) * 1.75;
+    else {
+      let rT = 0;
+      if (hover) { st.hiZ = clamp(st.hiZ - vgb[2] * 0.012 * dt, -0.05, 0.05); rT = clamp(-vgb[2] * 0.03 + st.hiZ, -0.09, 0.09); }
+      pd = normal ? clamp((rT - rollAng) * 2.6, -1.2, 1.2) : pT0 ? 0 : clamp(-rollAng * 2.2, -1.6, 1.6);   // mid-loop with the pitch stick held: leave the roll alone   // let go upside down and it rolls upright the short way
+    }
+    // inner rate loop with an integrator (trims out steady moments: rotor damping, stabilator, tail rotor), plus blowback feed-forward
+    const eq = qd - w[2], epr = pd - w[0];
+    st.pI = clamp((st.pI || 0) + eq * 1.6 * dt, -0.5, 0.5); st.rI = clamp((st.rI || 0) + epr * 2.0 * dt, -0.5, 0.5);
     if (st.onGround) { st.pI *= 1 - dt * 2; st.rI *= 1 - dt * 2; }
-    // feed-forward: cancel the disc's blowback with airspeed so the attitude holds as you speed up and slow down
-    cp = clamp(ep * 2.6 + st.pI - w[2] * 1.3 - (st.bbP || 0) / R.CYCP, -1.1, 1.1);
-    cr = clamp(er * 2.0 + st.rI - w[0] * 0.95 + (st.bbR || 0) / R.CYCR, -1.1, 1.1);
+    cp = clamp(eq * 1.7 + st.pI - (st.bbP || 0) / R.CYCP, -1.2, 1.2);
+    cr = clamp(epr * 0.9 + st.rI + (st.bbR || 0) / R.CYCR, -1.2, 1.2);
     // pedals: cancel the change in rotor torque, hold heading when your feet are off, coordinate turns at speed
     const need = (R.TR0 - (st.qm || 0) / -R.TR[0]) / R.TRK;
     py += st.engine ? need * 0.9 : 0;
-    if (Math.abs(c.yawT) < 0.05) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 3.0 * Math.min(1, (V - 12) / 15); }
+    if (Math.abs(c.yawT) < 0.05 && !(Math.abs(rollAng) > 1.4 || Math.abs(pitchAng) > 1.0)) { st.yI = clamp(st.yI + w[1] * 1.2 * dt, -0.6, 0.6); py += w[1] * 2.6 + st.yI; if (V > 12 && vb[0] > 0) py += Math.atan2(vb[2], vb[0]) * 3.0 * Math.min(1, (V - 12) / 15); }
     else st.yI *= 1 - dt;
   }
   cp = clamp(cp, -1.2, 1.2); cr = clamp(cr, -1.2, 1.2); py = clamp(py, -1.6, 1.6);
