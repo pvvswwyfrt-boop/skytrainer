@@ -93,7 +93,10 @@
   #rud .knob { position: absolute; top: 3px; width: 28px; height: 16px; border-radius: 8px; background: #a9dcff; box-shadow: 0 2px 6px rgba(0,0,0,.3); pointer-events: none; }
   #rud .cap { top: -12px; }
   #btns { left: 50%; transform: translateX(-50%); bottom: 14px; display: flex; gap: 5px; }
-  #wpn { right: calc(26px + min(104px, 30vh)); bottom: 50px; display: flex; flex-direction: column; gap: 8px; }
+  /* weapons on the LEFT thumb, beside the throttle/collective: fire at the bottom, then missile, flare, bombs */
+  #wpn { left: 66px; bottom: 14px; display: flex; flex-direction: column-reverse; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: min(270px, 66vh); }
+  #wpn #bGun { order: 1; } #wpn #bMsl { order: 2; } #wpn #bFlare { order: 3; } #wpn #bBomb { order: 4; } #wpn > .btn { order: 5; }
+  #wpn #bFlare svg { width: 14px; height: 14px; margin: 0; } #wpn #bFlare { flex-direction: column; gap: 0; }
   #wpn .btn { width: 46px; height: 46px; border-radius: 50%; padding: 0; justify-content: center; }
   #wpn .btn span { font-size: 10px; }
   #wpn .btn b { font-size: 9px; opacity: .7; }
@@ -220,7 +223,6 @@ html,body{width:100%;height:100%;background:#0b1a33}
   <div class="btn glass" id="bGear"><svg viewBox="0 0 24 24"><circle cx="12" cy="15" r="5"/><circle cx="12" cy="15" r="1.5"/><path d="M12 10V3"/></svg><span id="bGearV">DOWN</span></div>
   <div class="btn glass" id="bBrk"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M3.5 7a10 10 0 0 0 0 10M20.5 7a10 10 0 0 1 0 10"/></svg><span>BRAKE</span></div>
   <div class="btn glass" id="bWcam" style="display:none"><svg viewBox="0 0 24 24"><path d="M4 7h11l3-2v14l-3-2H4z M7 11h5"/></svg><span id="bWcamV">WPN CAM</span></div>
-  <div class="btn glass" id="bFlare" style="display:none"><svg viewBox="0 0 24 24"><path d="M12 3c2 4 5 5 5 9a5 5 0 0 1-10 0c0-2 1-3 2-4 0 2 1 3 2 3-1-3 0-6 1-8z"/></svg><span id="bFlareV">FLARE</span></div>
   <div class="btn glass" id="bRev" style="display:none"><svg viewBox="0 0 24 24"><path d="M20 12H5M9 8l-4 4 4 4"/><path d="M20 6v12"/></svg><span id="bRevV">REV</span></div>
   <div class="btn glass" id="bAuto" style="display:none"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M8 15l4-8 4 8M9.5 12h5"/></svg><span id="bAutoV">AUTO</span></div>
   <div class="btn glass" id="bStage" style="display:none"><svg viewBox="0 0 24 24"><path d="M12 3v7M9 7l3-4 3 4"/><rect x="9" y="12" width="6" height="9" rx="1"/></svg><span>STAGE</span></div>
@@ -232,7 +234,7 @@ html,body{width:100%;height:100%;background:#0b1a33}
   <div class="btn glass" id="bRadio"><svg viewBox="0 0 24 24"><rect x="4" y="9" width="16" height="11" rx="2"/><path d="M7 9l10-5"/><circle cx="15" cy="14.5" r="2.5"/><path d="M7 13h3M7 16h3"/></svg><span id="bRadioV">RADIO</span></div>
   <div class="btn glass" id="bMenu"><svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>MENU</span></div>
 </div>
-<div class="ctl" id="wpn"><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass nuke" id="bRkt" style="display:none"><span>ROCKET</span><b id="bRktV">120s</b></div><div class="btn glass" id="bDef" style="display:none"><span>DEF</span><b id="bDefV">AUTO</b></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
+<div class="ctl" id="wpn"><div class="btn glass" id="bFlare" style="display:none"><svg viewBox="0 0 24 24"><path d="M12 3c2 4 5 5 5 9a5 5 0 0 1-10 0c0-2 1-3 2-4 0 2 1 3 2 3-1-3 0-6 1-8z"/></svg><span id="bFlareV">FLARE</span></div><div class="btn glass" id="bCat" style="display:none"><span>TO CAT</span></div><div class="btn glass" id="bHook" style="display:none"><span>HOOK</span><b id="bHookV">UP</b></div><div class="btn glass gun" id="bGun" style="display:none"><span>GUN</span></div><div class="btn glass nuke" id="bRkt" style="display:none"><span>ROCKET</span><b id="bRktV">120s</b></div><div class="btn glass" id="bDef" style="display:none"><span>DEF</span><b id="bDefV">AUTO</b></div><div class="btn glass" id="bMsl"><span>MSL</span><b id="bMslV">2</b></div><div class="btn glass" id="bBomb"><span>BOMB</span><b id="bBombV">2</b></div><div class="btn glass nuke" id="bNuke" style="display:none"><span>☢</span><b id="bNukeV">1</b></div><div class="btn glass nuke" id="bEject" style="display:none"><span>⏏</span><b>EJECT</b></div></div><div id="nukeFlash"></div>
 <div class="ctl glass" id="rud"><div class="cap" id="rudLab">RUDDER</div><div class="knob" id="rudK"></div></div>
 <div class="ctl glass" id="stick"><div class="cap t" id="stT">PULL</div><div class="cap b" id="stB">PUSH</div><div class="knob" id="stK"></div></div>
 <div id="sys" class="glass">
@@ -5089,7 +5091,7 @@ function apacheCues(g, VP, W, H) {
   if (s) { const r = 11; g.beginPath(); g.moveTo(s[0] - r * 2, s[1]); g.lineTo(s[0] - r, s[1]); g.moveTo(s[0] + r, s[1]); g.lineTo(s[0] + r * 2, s[1]); g.moveTo(s[0], s[1] - r * 2); g.lineTo(s[0], s[1] - r); g.moveTo(s[0], s[1] + r); g.lineTo(s[0], s[1] + r * 2); g.stroke();
     g.beginPath(); g.arc(s[0], s[1], 2, 0, 7); g.fill(); if (st.gunLimit) g.fillText('LIMIT', s[0], s[1] + 34); }
   if (st.gunTgt) { const t = P(st.gunTgt.p); if (t) { g.strokeRect(t[0] - 16, t[1] - 16, 32, 32); g.fillText(`${(V3.len(V3.sub(st.gunTgt.p, st.pos)) / 1000).toFixed(1)} km`, t[0], t[1] - 22); } }
-  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 74, H - 62);
+  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 10, 146);   // under the status lines, clear of the weapon buttons
   g.restore();
   return true;
 }
@@ -10090,7 +10092,9 @@ function stepAI(dt) {
     if (mil && !AI.hostileOn && !MISSION.on && AI.scrT > 18) {
       // the alert fighters go off the carrier's catapults (with the warships switched off there is no carrier: they arrive by air)
       if (a.kind === 'heli') heliGunships(2, 0.4);
-      if (carrierLaunch(4, { skill: 0.4 })) ui.toast('CARRIER LAUNCHING', '4 bandits off the deck of the Leviathan, coming for you' + (a.kind === 'heli' ? ' — and 2 enemy gunships low' : ''));
+      const big = a.key === 'f22';   // the Raptor gets the whole air force
+      if (big) banditsByAir(6, { hp: 4, skill: 0.45 });
+      if (carrierLaunch(big ? 6 : 4, { skill: 0.4 })) ui.toast('CARRIER LAUNCHING', (big ? '6 bandits off the deck — and 6 more inbound by air' : '4 bandits off the deck of the Leviathan, coming for you') + (a.kind === 'heli' ? ' — and 2 enemy gunships low' : ''));
       else if (CFG.navy === false) { AI.hostileOn = true;
         const back = V3.norm([-st.vel[0], 0, -st.vel[2]]), side = [-back[2], 0, back[0]];
         for (const s of [-1, 1]) { const p = V3.add(st.pos, V3.add(V3.mul(back[0] || back[2] ? back : [1, 0, 0], 5500), V3.mul(side, s * 400))); p[1] = Math.max(st.pos[1], surfaceAt(p[0], p[2]).h + 300);
@@ -10351,6 +10355,17 @@ function aiHeliHostile(ai, dt) {
     SIM.ev.push({ t: 'launch' }); ui.toast('MISSILE LAUNCH', ai.name + ' fired — FLARES and turn hard');
   }
   if (ai.msl === 0 && ai.cool < -25) ai.msl = 1;
+}
+
+// bandits that arrive by air, spread around you at 9-14 km, at your height give or take
+function banditsByAir(n, o = {}) {
+  const st = SIM.st, base = Math.random() * 6.283;
+  for (let i = 0; i < n; i++) {
+    const ang = base + i * (6.283 / Math.max(n, 1)) + (Math.random() - 0.5) * 0.4, r = 9000 + Math.random() * 5000, p = [st.pos[0] + Math.cos(ang) * r, 0, st.pos[2] + Math.sin(ang) * r];
+    p[1] = Math.max(surfaceAt(p[0], p[2]).h + 400, st.pos[1] + (Math.random() - 0.4) * 1500);
+    AI.list.push(Object.assign(aiMake('jet', 'hostile', p, Math.atan2(st.pos[0] - p[0], -(st.pos[2] - p[2])), 300, { gear: 0, name: 'Bandit ' + (100 + Math.floor(Math.random() * 900)), altBias: (Math.random() - 0.5) * 1200 }), o));
+  }
+  AI.hostileOn = true;
 }
 
 // ===================== Warships =====================
@@ -11071,9 +11086,11 @@ function stepWaves(dt) {
   AI.waveT = (AI.waveT || 0) + dt;
   if (AI.waveT < 9) return;
   AI.waveT = 0; AI.wave = (AI.wave || 1) + 1;
-  if (st.acd.kind === 'heli' || AI.wave >= 3) heliGunships(Math.min(1 + Math.floor(AI.wave / 2) + (st.acd.kind === 'heli' ? 1 : 0), 5), Math.min(1, 0.4 + AI.wave * 0.1));   // enemy attack helicopters join in
-  const n0 = Math.min(2 + AI.wave, 8), o = { hp: 3 + Math.min(AI.wave, 4), skill: Math.min(1, 0.4 + AI.wave * 0.12) };
-  let n = carrierLaunch(n0, o);   // every wave comes off the carrier's catapults
+  const big = st.acd.key === 'f22';
+  if (st.acd.kind === 'heli' || AI.wave >= (big ? 2 : 3)) heliGunships(Math.min(1 + Math.floor(AI.wave / 2) + (st.acd.kind === 'heli' ? 1 : 0), 5), Math.min(1, 0.4 + AI.wave * 0.1));   // enemy attack helicopters join in
+  const n0 = big ? Math.min(6 + AI.wave * 2, 16) : Math.min(2 + AI.wave, 8), o = { hp: 3 + Math.min(AI.wave, 4), skill: Math.min(1, 0.4 + AI.wave * 0.12) };
+  let n = carrierLaunch(big ? Math.ceil(n0 / 2) : n0, o);   // every wave comes off the carrier's catapults
+  if (big) { banditsByAir(n0 - n, o); n = n0; }   // against the Raptor the rest arrive by air from every side
   if (!n && CFG.navy === false) { n = n0; const base = Math.random() * 6.283;
     for (let i = 0; i < n; i++) { const a = base + (i - (n - 1) / 2) * 0.35, r = 7000 + Math.random() * 1500, p = [st.pos[0] + Math.cos(a) * r, 0, st.pos[2] + Math.sin(a) * r];
       p[1] = Math.max(surfaceAt(p[0], p[2]).h + 300, st.pos[1] + (Math.random() - 0.4) * 900);
@@ -13517,7 +13534,7 @@ function heliUI(a) {
   ra.style.display = heli ? '' : 'none'; $('papi').parentElement.style.display = heli ? 'none' : '';
   // hover mark on the collective
   let dm = $('heliDet'); if (!dm) { dm = document.createElement('div'); dm.id = 'heliDet'; dm.style.cssText = 'position:absolute;left:3px;right:3px;height:2px;background:#6fffa0;box-shadow:0 0 6px #6fffa0;pointer-events:none;border-radius:1px'; $('thr').appendChild(dm);
-    const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;left:calc(100% + 6px);top:-6px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
+    const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;left:0;top:-14px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
   dm.style.display = ah ? '' : 'none'; if (ah) { const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - 0.44) * (H0 - 24) + 11) + 'px'; }
   // DASE hold buttons
   const mk = (id, label, svg) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam')); } return b; };
