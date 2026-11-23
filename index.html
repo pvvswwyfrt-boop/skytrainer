@@ -75,27 +75,28 @@
 
   /* ---------- controls ---------- */
   .ctl { position: fixed; touch-action: none; }
-  #zoomBox { display: none; flex-direction: column; gap: 10px; left: calc(env(safe-area-inset-left) + 74px); top: 50%; transform: translateY(-50%); z-index: 20; }
+  #zoomBox { display: none; flex-direction: column; gap: 10px; right: calc(env(safe-area-inset-right) + 22px); top: 36%; transform: translateY(-50%); z-index: 20; }   /* right side: the left belongs to the weapons */
   #zoomBox div { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 26px; font-weight: 700; color: #fff; }
   #zoomBox div.on { background: rgba(255,255,255,.35); }
   .cap { position: absolute; left: 0; right: 0; text-align: center; font-size: 8px; font-weight: 700; letter-spacing: .14em; opacity: .7; pointer-events: none; }
-  #thr { left: 14px; bottom: 14px; width: 34px; height: min(124px, 34vh); border-radius: 17px; overflow: visible; }
+  #thr { left: calc(env(safe-area-inset-left) + 14px); bottom: 14px; width: 34px; height: min(124px, 34vh); border-radius: 17px; overflow: visible; }
   #thr .fill { position: absolute; left: 3px; right: 3px; bottom: 3px; border-radius: 14px; background: linear-gradient(0deg, rgba(255,180,60,.75), rgba(255,211,77,.35)); pointer-events: none; }
   #thr .knob { position: absolute; left: -3px; width: 40px; height: 20px; border-radius: 10px; background: #fff; color: #111; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 8px rgba(0,0,0,.35); pointer-events: none; }
   #thr .cap { top: -13px; }
-  #stick { right: 14px; bottom: 50px; width: min(104px, 30vh); height: min(104px, 30vh); border-radius: 50%; }
+  #stick { right: calc(env(safe-area-inset-right) + 14px); bottom: 50px; width: min(104px, 30vh); height: min(104px, 30vh); border-radius: 50%; }
   #stick::before, #stick::after { content: ''; position: absolute; background: var(--line); pointer-events: none; }
   #stick::before { left: 50%; top: 12%; bottom: 12%; width: 1px; } #stick::after { top: 50%; left: 12%; right: 12%; height: 1px; }
   #stick .knob { position: absolute; width: 34px; height: 34px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #fff, #cfd6e0); box-shadow: 0 3px 10px rgba(0,0,0,.4); pointer-events: none; }
   #stick .cap.t { top: 4px; } #stick .cap.b { bottom: 4px; }
-  #rud { right: 14px; bottom: 12px; width: min(104px, 30vh); height: 24px; border-radius: 12px; }
+  #rud { right: calc(env(safe-area-inset-right) + 14px); bottom: 12px; width: min(104px, 30vh); height: 24px; border-radius: 12px; }
   #rud::before { content: ''; position: absolute; left: 50%; top: 5px; bottom: 5px; width: 1px; background: var(--line); }
   #rud .knob { position: absolute; top: 3px; width: 28px; height: 16px; border-radius: 8px; background: #a9dcff; box-shadow: 0 2px 6px rgba(0,0,0,.3); pointer-events: none; }
   #rud .cap { top: -12px; }
-  #btns { left: 50%; transform: translateX(-50%); bottom: 14px; display: flex; gap: 5px; }
+  #btns { left: 50%; transform: translateX(-50%); transform-origin: 50% 100%; bottom: 14px; display: flex; gap: 5px; }
   /* weapons on the LEFT thumb, beside the throttle/collective: fire at the bottom, then missile, flare, bombs */
-  #wpn { left: 66px; bottom: 14px; display: flex; flex-direction: column-reverse; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: min(270px, 66vh); }
+  #wpn { left: calc(env(safe-area-inset-left) + 62px); bottom: 14px; display: flex; flex-direction: column-reverse; flex-wrap: wrap; align-content: flex-start; gap: 8px; max-height: min(270px, calc(100vh - 180px)); }
   #wpn #bGun { order: 1; } #wpn #bMsl { order: 2; } #wpn #bFlare { order: 3; } #wpn #bBomb { order: 4; } #wpn > .btn { order: 5; }
+  #wpn .btn span { font-size: 10px !important; letter-spacing: 0 !important; } #wpn .btn b { font-size: 9px !important; }
   #wpn #bFlare svg { width: 14px; height: 14px; margin: 0; } #wpn #bFlare { flex-direction: column; gap: 0; }
   #wpn .btn { width: 46px; height: 46px; border-radius: 50%; padding: 0; justify-content: center; }
   #wpn .btn span { font-size: 10px; }
@@ -5091,7 +5092,7 @@ function apacheCues(g, VP, W, H) {
   if (s) { const r = 11; g.beginPath(); g.moveTo(s[0] - r * 2, s[1]); g.lineTo(s[0] - r, s[1]); g.moveTo(s[0] + r, s[1]); g.lineTo(s[0] + r * 2, s[1]); g.moveTo(s[0], s[1] - r * 2); g.lineTo(s[0], s[1] - r); g.moveTo(s[0], s[1] + r); g.lineTo(s[0], s[1] + r * 2); g.stroke();
     g.beginPath(); g.arc(s[0], s[1], 2, 0, 7); g.fill(); if (st.gunLimit) g.fillText('LIMIT', s[0], s[1] + 34); }
   if (st.gunTgt) { const t = P(st.gunTgt.p); if (t) { g.strokeRect(t[0] - 16, t[1] - 16, 32, 32); g.fillText(`${(V3.len(V3.sub(st.gunTgt.p, st.pos)) / 1000).toFixed(1)} km`, t[0], t[1] - 22); } }
-  g.textAlign = 'left'; g.fillText(`30MM ${CFG.unlimitedWpn ? '∞' : st.ammo}   HF ${st.stores ? st.stores.m.filter(Boolean).length : 0}   RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}`, 10, 146);   // under the status lines, clear of the weapon buttons
+  // (rounds / Hellfires / rockets left are shown in the status lines)
   g.restore();
   return true;
 }
@@ -13361,6 +13362,7 @@ function updateHUD(dt) {
   const brg = (Math.round(Math.atan2(n.ap.x - st.pos[0], -(n.ap.z - st.pos[2])) / D2R) + 360) % 360;
   $('status').innerHTML = `${n.ap.code} ${(n.d / 1000).toFixed(1)} km · ${String(brg).padStart(3, '0')}°<br>AGL ${Math.max(0, Math.round(agl * FT))} ft · ${st.g.toFixed(1)} G${st.acd.stovl && (st.conv > 0 || SIM.ctl.set) ? stovlStatus(st) : ''}${(st.brakeT || 0) > 120 ? ` · <span style="color:${st.brakeT > 420 ? '#ff8a6a' : '#ffd27a'}">BRK ${Math.round(st.brakeT + 20)}°C</span>` : ''}` +
     (a.piston ? `<br>CHT ${Math.round(st.cht)}°C · MIX ${SIM.opt.assist ? 'AUTO' : Math.round(c.mix * 100) + '%'}${st.carbIce > 0.15 ? ' · ICE ' + Math.round(st.carbIce * 100) + '%' : ''}` : '') + (a.kind === 'heli' ? `<br>ROTOR ${Math.round(st.rpm * 100)}%${a.twin ? (st.oei ? ' · ENG 1 OUT' : ' · ENG 1+2') : ''}` : '') + (a.hyper ? `<br>${st.mach > 3 && c.thr > 0.05 ? 'SCRAMJET' : 'TURBINE'} · SKIN ${Math.round(st.skinT)}°C` : '') + (a.f22 ? `<br>${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? ((st.mach || 0) >= 1 ? 'SUPERCRUISE' : 'MIL POWER') : 'ENGINES OFF'} · ${Math.round(st.g * 10) / 10} G · AOA ${Math.round((st.alpha || 0) / D2R)}°` : '') + (a.b2 ? `<br>MACH ${(st.mach || 0).toFixed(2)} · ${Math.round(st.g * 10) / 10} G · BAYS ${(st.bayK || 0) > 0.95 ? 'OPEN' : (st.bayK || 0) > 0.02 ? 'MOVING' : 'CLOSED'} · ${(st.bayK || 0) > 0.3 ? 'RADAR VISIBLE' : 'STEALTH'}` : '') + (a.sr71 ? `<br>KEAS ${Math.round(Math.sqrt(2 * (st.qbar || 0) / 1.225) * KT)} · ${st.ab > 0.01 ? 'AFTERBURNER ' + Math.round(st.ab * 100) + '%' : st.engine ? 'MIL POWER' : 'ENGINES OFF'}<br>CIT ${Math.round(st.cit || 15)}°C · SKIN ${Math.round(st.skinT)}°C · SPIKES ${Math.round(clamp(((st.mach || 0) - 1.6) / 1.6, 0, 1) * 26)} in` : '') + (st.damage.length ? `<br><span style="color:#ff8a7a">⚠ ${st.damage.join(' · ')}</span>` : '') + (st.engine && st.rpm < 0.25 && st.starting > 0 ? '<br>ENGINE STARTING…' : '') + (SIM.opt.wind !== 'calm' ? `<br>WIND ${String(SIM.opt.windFrom).padStart(3, '0')}° ${Math.round(Math.hypot(SIM.wind[0], SIM.wind[2]) * KT)} kt <span style="display:inline-block;transform:rotate(${(SIM.opt.windFrom - hd + 180)}deg)">↑</span>` : '');
+  if (a.ah64) $('status').innerHTML += `<br><span style="color:#8dffa8">30MM ${CFG.unlimitedWpn ? '∞' : st.ammo} · HF ${st.stores ? st.stores.m.filter(Boolean).length : 0} · RKT ${CFG.unlimitedWpn ? '∞' : st.rockets || 0}</span>`;
   if (AI.hostileOn && MILITARY(a.key)) $('status').innerHTML += `<br><span style="color:#ffb39f">WAVE ${AI.wave || 1} · ${AI.kills || 0} KILL${AI.kills === 1 ? '' : 'S'}${cvShip() ? ' · ' + cvShip().wing + ' ON DECK' : ''}</span>`;
   { const rp = $('radio'); if (rp && rp.classList.contains('on')) rp.style.top = Math.round($('status').getBoundingClientRect().bottom + 6) + 'px'; }
   drawMinimap();
@@ -13534,7 +13536,7 @@ function heliUI(a) {
   ra.style.display = heli ? '' : 'none'; $('papi').parentElement.style.display = heli ? 'none' : '';
   // hover mark on the collective
   let dm = $('heliDet'); if (!dm) { dm = document.createElement('div'); dm.id = 'heliDet'; dm.style.cssText = 'position:absolute;left:3px;right:3px;height:2px;background:#6fffa0;box-shadow:0 0 6px #6fffa0;pointer-events:none;border-radius:1px'; $('thr').appendChild(dm);
-    const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'position:absolute;left:0;top:-14px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
+    const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'display:none;position:absolute;left:0;top:-14px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
   dm.style.display = ah ? '' : 'none'; if (ah) { const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - 0.44) * (H0 - 24) + 11) + 'px'; }
   // DASE hold buttons
   const mk = (id, label, svg) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam')); } return b; };
@@ -13549,7 +13551,20 @@ function heliUI(a) {
   if (ah) { const st = SIM.st; bA.classList.toggle('on', st.altHold != null); $('bAltHV').textContent = st.altHold != null ? 'ALT ' + Math.round(st.altHold * FT) + ' FT' : 'ALT HOLD';
     bH.classList.toggle('on', st.hvrOff !== true); $('bHvrV').textContent = st.hvrOff ? 'HOVER OFF' : 'HOVER HOLD'; }
 }
-function updSet() {
+// keep the bottom button bar between the weapon column(s) on the left and the stick on the right: centre it in the gap and
+// shrink it to fit on narrow phones, so nothing ever overlaps
+function fitBars() {
+  const bb = $('btns'), wp = $('wpn'), sk = $('stick'), rd = $('rud'); if (!bb || !wp) return;
+  const vis = e => { if (!e) return null; const r = e.getBoundingClientRect(); return r.width > 0 && getComputedStyle(e).display !== 'none' ? r : null; };   // (fixed elements have no offsetParent)
+  let L = 0; for (const e of wp.children) { const r = vis(e); if (r) L = Math.max(L, r.right); }
+  { const r = vis($('thr')); if (r) L = Math.max(L, r.right); }
+  let R = innerWidth; for (const e of [sk, rd]) { const r = vis(e); if (r) R = Math.min(R, r.left); }
+  L += 8; R -= 8;
+  const w = bb.scrollWidth, sc = clamp((R - L) / Math.max(w, 1), 0.55, 1);
+  bb.style.left = ((L + R) / 2) + 'px'; bb.style.transform = `translateX(-50%) scale(${sc.toFixed(3)})`;
+}
+addEventListener('resize', () => setTimeout(fitBars, 60));
+function updSet() { setTimeout(fitBars, 0);
   const a = SIM.st.acd, c = SIM.ctl;
   if (a.kind === 'rocket') { $('bSet').style.display = ''; $('bGear').style.display = ''; $('bBrk').style.display = 'none'; updRocketUI(); return; }
   if (a.sr71) { $('bSet').style.display = ''; $('bSetN').textContent = SIM.st.chute === 1 ? 'CHUTE OUT' : SIM.st.chute === 2 ? 'CHUTE GONE' : 'CHUTE'; $('bGear').style.display = ''; $('bBrk').style.display = ''; $('bGearV').textContent = c.gearDown ? 'DOWN' : 'UP'; $('bGear').classList.toggle('on', !c.gearDown); return; }
@@ -14201,7 +14216,7 @@ function drawJetHUD(VP) {
   g.restore();
 }
 
-function updWpn() {
+function updWpn() { setTimeout(fitBars, 0);
   const S = SIM.st && SIM.st.stores;
   $('wpn').style.display = S && appState !== 'menu' ? 'flex' : 'none';
   if (!S) return;
