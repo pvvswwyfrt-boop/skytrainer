@@ -5195,7 +5195,7 @@ function ah64Rotor(st, a, c, dt, rho, vb, V, agl, rollAng, pitchAng, L) {
   const rbs = easy ? 0 : clamp((mu - 0.38) / 0.08, 0, 1.5) * (CT > 0.004 ? 1 : 0.5);   // EASY: no retreating-blade stall
   stall = Math.max(stall, rbs * 0.7);
   if (cts > ctsMax) T = rho * R.A * OR * OR * R.SIG * ctsMax * kge * rotorOK;
-  if (stall > 0 && rotorOK) { M[2] += 26000 * stall; M[0] -= 22000 * stall; SIM.shake = Math.max(SIM.shake || 0, 0.35 * stall); }
+  if (stall > 0 && rotorOK) { M[2] += 26000 * stall; M[0] -= 22000 * stall; }
   st.bstall = stall;
   // vortex ring: sinking at 35-160% of the hover induced velocity with almost no airspeed
   const vh = Math.sqrt(Math.max(T, 1) / (2 * rho * R.A)), desc = -vn, vinS = V3.len(vin);
@@ -7678,7 +7678,7 @@ function stepSim(dt) {
       // stall and spin: past the critical angle one wing lets go first, and yawing feeds autorotation
       // stalled wing sections: roll damping turns into roll *driving* (autorotation) and their drag yaws the nose
       const sk = a.spinK || (a.piston ? 0.7 : 1), ClSpin = dCl * sk, CnSpin = dCn * sk;
-      if (nSt > 0.05 && st.airborne) SIM.shake = Math.max(SIM.shake || 0, clamp(nSt * 0.5, 0, 0.35) * clamp(V / 40, 0, 1));   // buffet
+      st.buffet = nSt > 0.05 && st.airborne ? clamp(nSt * 0.5, 0, 0.35) * clamp(V / 40, 0, 1) : 0;   // buffet (no camera shake: hard turns stay steady on screen)
       const Cn = (a.CNB * tk - 0.03 * (1 - tk)) * beta + a.CNDR * yawIn * tk + a.CNR * (0.2 + 0.8 * tk) * yR * a.b / (2 * Vd) + a.CNDA * rollIn + (rw - lw) * 0.02;
       Mb = V3.add(Mb, [qbar * a.S * a.b * (Cl + ClSpin), -qbar * a.S * a.b * (Cn + CnSpin), qbar * a.S * a.c * Cm]);
       if (a.b2 && st.engine) Mb = V3.add(Mb, [0, -yawIn * Math.max(0, T) * 0.6, 0]);   // B-2: the flight computer also yaws it with differential thrust across the four engines
