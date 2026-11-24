@@ -13539,11 +13539,12 @@ function heliUI(a) {
     const lb = document.createElement('div'); lb.textContent = 'HOVER'; lb.style.cssText = 'display:none;position:absolute;left:0;top:-14px;font:700 9px Rajdhani,sans-serif;color:#6fffa0;letter-spacing:1px;text-shadow:0 1px 2px #000'; dm.appendChild(lb); }
   dm.style.display = ah ? '' : 'none'; if (ah) { const H0 = $('thr').clientHeight; dm.style.top = (2 + (1 - 0.44) * (H0 - 24) + 11) + 'px'; }
   // DASE hold buttons
-  const mk = (id, label, svg) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam')); } return b; };
-  const bA = mk('bAltH', 'ALT HOLD', '<svg viewBox="0 0 24 24"><path d="M4 18h16M12 4v10M8 10l4 4 4-4"/></svg>');
-  const bH = mk('bHvr', 'HOVER HOLD', '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>');
+  const mk = (id, label, svg, fn) => { let b = $(id); if (!b) { b = document.createElement('div'); b.className = 'btn glass'; b.id = id; b.innerHTML = svg + '<span id="' + id + 'V">' + label + '</span>'; $('btns').insertBefore(b, $('bCam'));
+    b.addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fn(); updSet(); }); } return b; };   // created on first use, wired up as it's made
+  const bA = mk('bAltH', 'ALT HOLD', '<svg viewBox="0 0 24 24"><path d="M4 18h16M12 4v10M8 10l4 4 4-4"/></svg>', ah64AltHold);
+  const bH = mk('bHvr', 'HOVER HOLD', '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>', ah64HoverToggle);
   const easy = ah && CFG.heliEasy !== false;
-  const bM = mk('bMode', 'EASY', '<svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>');
+  const bM = mk('bMode', 'EASY', '<svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>', heliModeToggle);
   bM.style.display = ah ? '' : 'none'; $('bModeV').textContent = easy ? 'EASY' : 'REAL'; bM.classList.toggle('on', !easy);
   bA.style.display = bH.style.display = ah && !easy ? '' : 'none';
   if (dm.firstChild) dm.firstChild.textContent = easy ? 'HOLD' : 'HOVER';
@@ -13631,7 +13632,7 @@ function bindControls() {
     SIM.ctl.rollT = dx; SIM.ctl.pitchT = -dy * inv(); updStick();
   }, () => { SIM.ctl.rollT = 0; SIM.ctl.pitchT = 0; updStick(); });
   drag($('rud'), e => { const r = $('rud').getBoundingClientRect(); SIM.ctl.yawT = clamp((e.clientX - r.left - 17) / (r.width - 34) * 2 - 1, -1, 1); updRud(); }, () => { SIM.ctl.yawT = 0; updRud(); });
-  const tap = (id, fn) => $(id).addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fn(); });
+  const tap = (id, fn) => $(id) && $(id).addEventListener('pointerdown', e => { e.preventDefault(); e.stopPropagation(); fn(); });
   tap('bCal', () => { TILT.cal = true; TILT.r = TILT.p = 0; SIM.ev.push({ t: 'click' }); ui.toast('CALIBRATED', 'The way you are holding the phone is now level'); });
   tap('bSet', cycleSet);
   tap('bStage', () => rocketStage());
@@ -13653,7 +13654,7 @@ function bindControls() {
   tap('sReset', () => { spawn(false); $('sys').classList.remove('open'); });
   tap('sMixD', () => { SIM.ctl.mix = clamp(SIM.ctl.mix - 0.05, 0.3, 1); updSys(); });
   tap('sMixU', () => { SIM.ctl.mix = clamp(SIM.ctl.mix + 0.05, 0.3, 1); updSys(); });
-  tap('bFlare', dropFlares); tap('bAltH', () => { ah64AltHold(); updSet(); }); tap('bMode', () => { heliModeToggle(); updSet(); }); tap('bHvr', () => { ah64HoverToggle(); updSet(); }); tap('bWcam', wcamToggle);
+  tap('bFlare', dropFlares); tap('bWcam', wcamToggle);
   tap('sAB', () => { const c = SIM.ctl; c.abLvl = ((c.abLvl || 0) + 1) % AUTOBRAKE.length; SIM.st.abOff = false; SIM.ev.push({ t: 'click' }); updSys(); });
   tap('bRev', () => { const st = SIM.st, c = SIM.ctl;
     if (!c.rev && !st.onGround) { ui.toast('REVERSE', 'Only with the main wheels on the runway'); return; }
