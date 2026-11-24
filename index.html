@@ -4207,44 +4207,61 @@ function cityTileBuild(ti, tj, lite) {
   for (const s of TILE_STY) if (TM[s].day.d.length) { out.day.push(TM[s].day.build()); out.night.push(TM[s].night.build()); }
   return out;
 }
-// Real-county tiles stream in around you AND ahead of you, so the ground and buildings are already built by the time
-// you get there: the packs (4 km) are fetched ~10-35 s ahead along your track, tiles are built nearest-first in the
-// direction you are flying within a few milliseconds per frame, and far / behind tiles stay cached but aren't drawn.
+// Scenery streaming with a memory budget (Mark 9). Tiles (1 km) are wanted in three places: around you, around where you'll
+// be in ~8 s, and around where you'll be in ~16 s, so ground and buildings are built before you arrive. They're built nearest-
+// to-your-path first, inside a few milliseconds per frame (never more than 2 a frame), and every tile's GPU memory (vertex
+// buffers + ground textures) is counted: past the budget for your quality setting, the least recently used tiles that
+// aren't wanted are freed. The budget, not a tile count, is what keeps a phone from running out of memory.
+const TILE_BUDGET = { low: 60e6, medium: 105e6, high: 160e6 };   // a real 1 km tile with its ground textures is ~9 MB
+function tileBytes(mesh, lite) {
+  let b = 0; const mb = m => { if (m) b += m.n * (m.pbr ? 64 : m.uv ? 48 : 40); };
+  mb(mesh.plain); mesh.day.forEach(mb); mesh.night.forEach(mb); mb(mesh.ground); mb(mesh.gnight);
+  if (mesh.texs && mesh.texs.length) b += (lite ? 512 * 512 : 1024 * 1024) * 4 * 1.34 + 256 * 256 * 4 * 1.34;
+  return b;
+}
+function tileFree(t) {
+  for (const m of [t.mesh.plain, ...t.mesh.day, ...t.mesh.night, t.mesh.ground, t.mesh.gnight]) if (m) R.gl.deleteBuffer(m.buf);
+  for (const tx of t.mesh.texs || []) R.gl.deleteTexture(tx.t || tx);
+}
 function cityTilesUpdate(eye, at) {
   if (!MIA.M) return [];
   const S = CITY_T.size, alt = eye[1] - Math.max(0, terrainH(eye[0], eye[2])), q = typeof qual === 'function' ? qual() : {};
-  const lvl = q === QPRESET.low ? 0 : q === QPRESET.medium ? 1 : 2;
-  const RF = alt < 700 ? 1 : -1, RL = alt < 900 ? 2 : alt < 2600 ? 1 : -1;   // full / lite radius (tiles): kept small, phones run out of memory   void lvl;
+  const lvl = q === QPRESET.low ? 'low' : q === QPRESET.medium ? 'medium' : 'high', budget = TILE_BUDGET[lvl] * (CITY_T.squeeze || 1);
+  const RF = alt < 700 ? 1 : -1, RL = alt < 900 ? 2 : alt < 2600 ? 1 : -1;   // full / lite radius around you (tiles)
   const v = SIM.st && !SIM.st.crashed ? SIM.st.vel : [0, 0, 0], vh = Math.hypot(v[0], v[2]);
-  const look = Math.min(vh * 8, S * 2.5), ax = eye[0] + (vh > 1 ? v[0] / vh * look : 0), az = eye[2] + (vh > 1 ? v[2] / vh * look : 0);
-  // fetch the county packs along the track before they're needed
+  const ax = eye[0] + v[0] * 8, az = eye[2] + v[2] * 8;   // where you'll be in 8 s
   if (typeof rtPrefetch === 'function') { rtPrefetch(eye[0], eye[2]); for (const tt of [10, 20, 35]) rtPrefetch(eye[0] + v[0] * tt, eye[2] + v[2] * tt); }
   const want = new Map();
-  const ring = (cx, cz) => { const ci = Math.floor(cx / S), cj = Math.floor(cz / S);
-    for (let dj = -RL; dj <= RL; dj++) for (let di = -RL; di <= RL; di++) { const i = ci + di, j = cj + dj, lite = Math.max(Math.abs(di), Math.abs(dj)) > RF, k = i + ',' + j, o = want.get(k);
+  const ring = (cx, cz, rf, rl) => { const ci = Math.floor(cx / S), cj = Math.floor(cz / S);
+    for (let dj = -rl; dj <= rl; dj++) for (let di = -rl; di <= rl; di++) { const i = ci + di, j = cj + dj, lite = Math.max(Math.abs(di), Math.abs(dj)) > rf, k = i + ',' + j, o = want.get(k);
       if (!o || (o.lite && !lite)) want.set(k, { i, j, lite }); } };
-  if (RL >= 0) ring(eye[0], eye[2]);
+  if (RL >= 0) {
+    ring(eye[0], eye[2], RF, RL);
+    if (vh > 15) { ring(ax, az, RF >= 0 ? 0 : -1, 1); ring(eye[0] + v[0] * 16, eye[2] + v[2] * 16, -1, 1); }   // the corridor ahead
+  }
   const fx = at ? at[0] - eye[0] : 0, fz = at ? at[2] - eye[2] : 0, fl = Math.hypot(fx, fz) || 1;
   const list = [...want.values()].map(w => { const cx = (w.i + 0.5) * S, cz = (w.j + 0.5) * S, dx = cx - eye[0], dz = cz - eye[2], d = Math.hypot(dx, dz);
-    const ahead = (dx * fx + dz * fz) / fl; w.d = d; w.vis = d < S * 1.6 || ahead > -S * 0.75; w.pri = Math.hypot(cx - ax, cz - az) + (w.vis ? 0 : S * 3) + (w.lite ? S * 0.5 : 0); return w; });
+    const ahead = (dx * fx + dz * fz) / fl; w.d = d; w.vis = d < S * 1.6 || ahead > -S * 0.75;
+    w.pri = Math.min(d, Math.hypot(cx - ax, cz - az) + S * 0.3) + (w.vis ? 0 : S * 3) + (w.lite ? S * 0.6 : 0); return w; });
   list.sort((a, b) => a.pri - b.pri);
-  const out = [], now = performance.now(), t0 = now; let built = 0;
+  const out = [], now = performance.now(), t0 = now, msBudget = lvl === 'low' ? 2.5 : 4; let built = 0;
+  CITY_T.bytes = CITY_T.bytes || 0;
   for (const w of list) {
     const k = w.i + ',' + w.j + (w.lite ? 'L' : 'F'); let t = CITY_T.tiles.get(k);
-    if (!t && built < 1) {   // one tile per frame (t0 kept for timing) 
-      void t0;
+    if (!t && built < 2 && (built === 0 || performance.now() - t0 < msBudget) && CITY_T.bytes < budget) {
       const D = rtTile(w.i, w.j);   // the county's real buildings and streets, when that pack has arrived
-      if (D !== null) { t = { mesh: D ? rtTileBuild(w.i, w.j, w.lite, D) : cityTileBuild(w.i, w.j, w.lite), t: 0, real: !!D }; CITY_T.tiles.set(k, t); built++; }
+      if (D !== null) { const mesh = D ? rtTileBuild(w.i, w.j, w.lite, D) : cityTileBuild(w.i, w.j, w.lite); t = { mesh, t: 0, real: !!D, bytes: tileBytes(mesh, w.lite) };
+        CITY_T.tiles.set(k, t); CITY_T.bytes += t.bytes; built++; }
     }
     if (!t && !w.lite) t = CITY_T.tiles.get(w.i + ',' + w.j + 'L');   // full detail still coming: show the lite tile meanwhile
     if (!t && w.lite) t = CITY_T.tiles.get(w.i + ',' + w.j + 'F');
     if (t) { t.t = now; if (w.vis) out.push(t.mesh); }
   }
-  const cap = rtOn() ? 40 : 70;
-  if (CITY_T.tiles.size > cap) { const old = [...CITY_T.tiles.entries()].sort((a, b) => a[1].t - b[1].t).slice(0, CITY_T.tiles.size - cap); for (const [k, t] of old) { if (t.t === now) continue;
-    for (const m of [t.mesh.plain, ...t.mesh.day, ...t.mesh.night, t.mesh.ground, t.mesh.gnight]) if (m) R.gl.deleteBuffer(m.buf);
-    for (const tx of t.mesh.texs || []) R.gl.deleteTexture(tx.t);
-    CITY_T.tiles.delete(k); } }
+  // over budget (or a hard cap as a backstop): free the least recently used tiles that aren't wanted right now
+  if (CITY_T.bytes > budget || CITY_T.tiles.size > 140) {
+    const old = [...CITY_T.tiles.entries()].filter(([, t]) => t.t !== now).sort((a, b) => a[1].t - b[1].t);
+    for (const [k, t] of old) { if (CITY_T.bytes <= budget * 0.9 && CITY_T.tiles.size <= 140) break; tileFree(t); CITY_T.bytes -= t.bytes || 0; CITY_T.tiles.delete(k); }
+  }
   return out;
 }
 
@@ -5415,6 +5432,55 @@ function ah64Easy(st, c, dt, agl, rollAng, pitchAng, V, grounded) {
 function heliModeToggle() {
   CFG.heliEasy = CFG.heliEasy === false; saveCFG(); const st = SIM.st; st.ez = null; st.altHold = null;
   ui.toast(CFG.heliEasy ? 'EASY FLYING' : 'REAL APACHE', CFG.heliEasy ? 'Stick = speed and direction, let go to hover. Collective = climb / hold / descend' : 'Full AH-64D handling with DASE: collective is collective, stick is cyclic');
+}
+
+// ===================== enemy armour for the Apache =====================
+// An armoured column (tanks, APCs, trucks and ZSU-23-4 Shilka anti-aircraft guns) drives across open ground a few km away.
+// They live in RANGE.targets, so the Hellfire, the 30 mm, the rockets (and the sight's lock) all work on them. The Shilkas
+// fight back: radar-laid 23 mm bursts at anything within ~2.5 km.
+const GKIND = { tank: 'T-72 tank', apc: 'BMP', truck: 'supply truck', aa: 'Shilka AA gun' };
+function groundForce(n) {
+  const st = SIM.st; let spot = null, hd = 0;
+  for (let k = 0; k < 60 && !spot; k++) {
+    const ang = Math.random() * 6.283, r = 3500 + Math.random() * 2500, x = st.pos[0] + Math.cos(ang) * r, z = st.pos[2] + Math.sin(ang) * r;
+    hd = Math.random() * 6.283; let ok = true;
+    for (let i = -2; i <= n + 2; i++) { const s = surfaceAt(x - Math.cos(hd) * i * 18, z + Math.sin(hd) * i * 18); if (s.water || s.rwy) { ok = false; break; } }
+    if (ok) spot = [x, z];
+  }
+  if (!spot) return;
+  const order = ['aa', 'tank', 'apc', 'tank', 'truck', 'aa', 'apc', 'truck', 'tank', 'apc', 'aa', 'truck'];
+  for (let i = 0; i < n; i++) {
+    const kind = order[i % order.length], x = spot[0] - Math.cos(hd) * i * 18, z = spot[1] + Math.sin(hd) * i * 18;
+    RANGE.targets.push({ kind, p: [x, surfaceAt(x, z).h, z], yaw: hd, dead: 0, burn: 0, enemy: true, sp: kind === 'truck' ? 7 : 5.5, cool: 2 + Math.random() * 3, name: GKIND[kind] });
+  }
+  const dx = spot[0] - st.pos[0], dz = spot[1] - st.pos[2], brg = (Math.atan2(dx, -dz) / D2R + 360) % 360;
+  ui.toast('ENEMY ARMOUR — ' + n + ' VEHICLES', `Column ${(Math.hypot(dx, dz) / 1000).toFixed(1)} km, bearing ${String(Math.round(brg)).padStart(3, '0')} · tanks and Shilka AA guns. Hellfires for the tanks, 30 mm for the rest`);
+}
+function stepGround(dt) {
+  const st = SIM.st;
+  for (let i = RANGE.targets.length - 1; i >= 0; i--) {
+    const t = RANGE.targets[i]; if (!t.enemy) continue;
+    if (t.dead) { if (!t.counted) { t.counted = true; AI.kills = (AI.kills || 0) + 1; ui.toast(t.name.toUpperCase() + ' DESTROYED', 'Enemy armour remaining: ' + RANGE.targets.filter(u => u.enemy && !u.dead).length); }
+      if (t.dead < 1.5) RANGE.targets.splice(i, 1); continue; }   // burnt out: gone (practice targets come back; these don't)
+    // drive: keep the column's heading, swing away from water and runways
+    const f = [Math.cos(t.yaw), 0, -Math.sin(t.yaw)], ah = surfaceAt(t.p[0] + f[0] * 35, t.p[2] + f[2] * 35);
+    if (ah.water || ah.rwy) t.yaw += 0.8 * dt; else { t.p[0] += f[0] * t.sp * dt; t.p[2] += f[2] * t.sp * dt; }
+    t.p[1] = surfaceAt(t.p[0], t.p[2]).h; t.v = [f[0] * t.sp, 0, f[2] * t.sp];
+    // the Shilkas shoot back
+    if (t.kind === 'aa' && !st.crashed && st.airborne) {
+      const to = V3.sub(st.pos, t.p), d = V3.len(to);
+      t.cool -= dt; t.burst = Math.max(0, (t.burst || 0) - dt);
+      if (d < 2500 && t.cool <= 0 && t.burst <= 0) { t.burst = 1.4; t.cool = 3.5 + Math.random() * 2.5; if (!t.warned) { t.warned = true; ui.toast('AAA — SHILKA FIRING', 'Radar-laid 23 mm. Break, get low behind cover, or kill it from beyond 2.5 km'); } }
+      if (t.burst > 0 && d < 2700) {
+        t.gacc = (t.gacc || 0) + dt * 30;
+        const mz = V3.add(t.p, [0, 2.6, 0]), V0 = 970, tof = d / V0, aim = V3.add(st.pos, V3.add(V3.mul(st.vel, tof * (0.8 + Math.random() * 0.35)), [0, 0.5 * GRAV * tof * tof, 0]));
+        while (t.gacc >= 1) { t.gacc--; const dir = V3.norm(V3.add(V3.norm(V3.sub(aim, mz)), [(Math.random() - 0.5) * 0.025, (Math.random() - 0.5) * 0.025, (Math.random() - 0.5) * 0.025]));
+          GUN.rounds.push({ p: mz.slice(), v: V3.mul(dir, V0), t: 0, own: false }); }
+        if (Math.random() < dt * 8) spawnFx('flash', mz, [0, 0, 0], 1.2);
+        if (Math.random() < dt * 6) SIM.ev.push({ t: 'gun', v: clamp(600 / Math.max(d, 200), 0.1, 0.5) });
+      }
+    }
+  }
 }
 
 // ===================== aircraft models (low-poly, original designs) =====================
@@ -7671,6 +7737,35 @@ function stepSim(dt) {
         const vvr = a.tvc ? p * Math.tan(clamp(alpha, 0, 1.2)) * smooth(0.25, 0.6, alpha) : 0;
         yawIn = lerp(yawIn, clamp(c.yaw + beta * 3 + (vvr - yR) * 0.6 - (a.tvc ? 0 : 0), -1, 1), blend);
       } else st.fbwI = 0;
+      // EASY flying (Mark 9, on by default): the stick asks for a bank angle and a climb/dive angle; let go and it levels the wings
+      // and levels off. The computer flies the real controls through rate loops,
+      // coordinates the rudder, never lets the wing stall (it caps the angle of attack and gives full power if it gets slow),
+      // and never pulls past the aircraft's g limit. Takeoff run and landing roll stay manual.
+      if (CFG.easyFW !== false && !a.stovl) {
+        const ex = x => Math.sign(x) * (0.35 * Math.abs(x) + 0.65 * Math.pow(Math.abs(x), 1.7));
+        const eb = st.contacts.some(Boolean) ? 0 : 1;   // airborne: always on (protection matters most when slow); on the wheels: manual
+        if (eb > 0) {
+          const gam = Math.asin(clamp(st.vel[1] / Math.max(V, 1), -1, 1)), rT0 = Math.abs(c.rollT) >= 0.05;
+          const maxBank = a.airliner ? 0.52 : a.b2 ? 0.8 : 1.2, maxQ = a.airliner ? 0.12 : a.b2 ? 0.18 : 0.42, maxG = a.airliner ? 0.26 : a.b2 ? 0.35 : 0.55;
+          // pitch: stick = climb (or dive) angle, up to ~30°; let go and it levels off. The last bit of travel keeps pulling (loops)
+          let qc;
+          const loopOK = qbar > 0.5 * 1.225 * Math.pow(a.piston ? 45 : a.b2 ? 110 : 120, 2);   // enough airspeed to go over the top
+          if (Math.abs(c.pitch) > 0.9 && !a.airliner && loopOK) qc = Math.sign(c.pitch) * maxQ;
+          else qc = clamp((ex(c.pitch) / 0.9 * maxG - gam) * 1.5, -maxQ, maxQ) * Math.max(0, Math.cos(rollAng));
+          if (Math.abs(rollAng) > 0.1 && Math.abs(rollAng) < 1.4) qc += GRAV / Math.max(V, 30) * (1 / Math.max(0.35, Math.cos(rollAng)) - 1) * Math.cos(rollAng);   // keep the nose up in a banked turn
+          // protections: angle of attack and g
+          const aoaMax = (a.fbwAoA || a.AS || 0.25) * 0.82, gL = (a.gLim || (a.airliner ? 2.5 : a.piston ? 3.8 : 7)) * GRAV / Math.max(V, 30);
+          qc = Math.min(qc, gL * 0.95, (aoaMax - alpha) * 3.5); qc = Math.max(qc, -gL * 0.4);
+          if (alpha > aoaMax - 0.03 && st.airborne && st.engine) c.thr = Math.max(c.thr, 1);   // alpha floor: full power
+          const errq = qc - q; st.ezI = clamp((st.ezI || 0) + errq * 3.0 * dt, -1.2, 1.2);
+          const ePitch = clamp(errq * 4.5 + st.ezI, -1.2, 1.2);
+          const phT = rT0 ? ex(c.roll) * maxBank : 0;   // let go: wings level (from upside down too, the short way)
+          const pc = clamp((phT - rollAng) * 2.4, -1.6, 1.6), eRoll = clamp((pc - p) * 1.3, -1, 1);
+          pitchIn = lerp(pitchIn, ePitch, eb); rollIn = lerp(rollIn, eRoll, eb);
+          yawIn = lerp(yawIn, clamp(c.yaw + beta * 3, -1, 1), eb);
+          st.ezOn = true;
+        } else { st.ezI = 0; st.ezOn = false; }
+      }
       st.elev = pitchIn;
       let Cm = a.CM0 * tk + (st.payload - 1) * -0.06 + FLAP(a.FCM) + (a.CMA * tk + 0.25 * (1 - tk)) * alpha + a.CMDE * pitchIn * tk + a.CMQ * (0.12 + 0.88 * tk) * q * a.c / (2 * Vd) - nSt * 0.08;
       const Cl = a.CLB * beta * wk + a.CLDA * rollIn * wk + a.CLP * (0.15 + 0.85 * wk) * p * a.b / (2 * Vd) + a.CLR * yR * a.b / (2 * Vd) + (stall ? (hash2(Math.floor(performance.now() / 300), 1) - 0.5) * 0.02 : 0)
@@ -8591,6 +8686,12 @@ function buildRange() {
     b.box([0.12, 2.6, 0], [0.05, 1.6, 2.4], [0.85, 0.15, 0.12]); b.box([0.15, 2.6, 0], [0.05, 0.7, 1.0], [0.95, 0.95, 0.92]); });
   // big painted bullseye on the ground
   m.eye = T(b => { [[60, [0.92, 0.92, 0.9]], [50, [0.8, 0.2, 0.16]], [36, [0.92, 0.92, 0.9]], [24, [0.8, 0.2, 0.16]], [12, [0.92, 0.92, 0.9]], [5, [0.8, 0.2, 0.16]]].forEach(([r, c], i) => b.cyl([0, 0.06 + i * 0.03, 0], [0, 0.08 + i * 0.03, 0], r, r, 40, c)); });
+  // enemy armour for the Apache: ZSU-23-4 'Shilka' anti-aircraft gun (tracked hull, flat turret, four barrels, radar dish) and a BMP-style APC
+  m.aa = T(b => { b.box([0, 0.85, 0], [6.4, 1.0, 3.1], [0.42, 0.4, 0.3]); b.box([0, 0.35, 1.4], [6.5, 0.7, 0.55], [0.17, 0.17, 0.16]); b.box([0, 0.35, -1.4], [6.5, 0.7, 0.55], [0.17, 0.17, 0.16]);
+    b.box([-0.3, 1.75, 0], [3.0, 0.8, 2.7], [0.44, 0.42, 0.31]); for (const z of [-0.5, -0.25, 0.25, 0.5]) b.cyl([0.9, 2.0, z], [3.6, 2.6, z], 0.06, 0.05, 6, [0.22, 0.22, 0.2]);
+    b.cyl([-1.5, 2.15, 0], [-1.5, 3.0, 0], 0.08, 0.08, 6, [0.3, 0.3, 0.28]); b.cyl([-1.5, 3.0, -0.6], [-1.5, 3.0, 0.6], 0.55, 0.55, 12, [0.36, 0.36, 0.3]); });
+  m.apc = T(b => { b.box([0, 0.95, 0], [6.6, 1.2, 3.0], [0.45, 0.43, 0.32]); b.box([2.6, 1.2, 0], [1.6, 0.7, 2.9], [0.43, 0.41, 0.3]); b.box([0, 0.35, 1.35], [6.7, 0.7, 0.5], [0.17, 0.17, 0.16]); b.box([0, 0.35, -1.35], [6.7, 0.7, 0.5], [0.17, 0.17, 0.16]);
+    b.cyl([0.4, 1.55, 0], [0.4, 2.0, 0], 0.75, 0.65, 10, [0.42, 0.4, 0.3]); b.cyl([0.9, 1.8, 0], [3.4, 1.85, 0], 0.07, 0.06, 6, [0.22, 0.22, 0.2]); });
   RANGE.m = m;
 }
 function rangeDraw() {
@@ -10093,6 +10194,7 @@ function stepAI(dt) {
     if (mil && !AI.hostileOn && !MISSION.on && AI.scrT > 18) {
       // the alert fighters go off the carrier's catapults (with the warships switched off there is no carrier: they arrive by air)
       if (a.kind === 'heli') heliGunships(2, 0.4);
+      if (a.ah64) groundForce(8);
       const big = a.key === 'f22';   // the Raptor gets the whole air force
       if (big) banditsByAir(6, { hp: 4, skill: 0.45 });
       if (carrierLaunch(big ? 6 : 4, { skill: 0.4 })) ui.toast('CARRIER LAUNCHING', (big ? '6 bandits off the deck — and 6 more inbound by air' : '4 bandits off the deck of the Leviathan, coming for you') + (a.kind === 'heli' ? ' — and 2 enemy gunships low' : ''));
@@ -10273,6 +10375,8 @@ function aiMinimap(mm, n, L) {
     mm.fillStyle = ai.role === 'hostile' ? '#ff4a3a' : ai.role === 'escort' || ai.role === 'hwing' ? '#62d6ff' : '#ffffff';
     mm.beginPath(); mm.arc(x, y, ai.role === 'hostile' ? 4 : 3, 0, Math.PI * 2); mm.fill();
   }
+  mm.fillStyle = '#ff7a3a';   // enemy armour: small squares
+  for (const t of RANGE.targets) if (t.enemy && !t.dead) { const x = (t.p[0] + L / 2) / L * n, y = (t.p[2] + L / 2) / L * n; if (x > 3 && y > 3 && x < n - 3 && y < n - 3) mm.fillRect(x - 2.5, y - 2.5, 5, 5); }
 }
 
 // ---- Apache wingmen: hold a tight slot each side (24 m out, 12 m back, your height above the ground), lift off and land with you,
@@ -11048,7 +11152,7 @@ function stepGun(dt) {
       if (r.t > 90) continue;
       for (const s of NAVY.ships) if (!s.dead && !(s.sink > 0) && Math.hypot(r.p[0] - s.p[0], r.p[2] - s.p[2]) < s.len * 0.45 && r.p[1] < s.p[1] + 28) { r.t = 99; spawnFx('spark', r.p, [0, 6, 0]); navyHit(s.p, s.len, r.he ? 0.09 : 0.035); if (r.he) ah64Burst(r.p, false, 1); break; }
       if (r.t > 90) continue;
-      for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 6) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); t.gh = (t.gh || 0) + (r.he ? 2 : 1); if (r.he) ah64Burst(r.p, false, 1); if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); } break; }
+      for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 6) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); t.gh = (t.gh || 0) + (r.he ? 2 : 1); if (r.he) ah64Burst(r.p, false, 1); if (t.gh >= ghMax(t)) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); } break; }
       if (r.t > 90) continue;
       for (const s of SAMS.sites) if (!s.dead && V3.len(V3.sub(s.p, r.p)) < 9) { r.t = 99; spawnFx('spark', r.p, [0, 5, 0]); s.hp -= r.he ? 0.5 : 0.25; if (r.he) ah64Burst(r.p, false, 1); if (s.hp <= 0) samKill(s); break; }
     } else if (r.friend) {   // a wingman's rounds
@@ -11059,7 +11163,7 @@ function stepGun(dt) {
       if (st2.gunHits >= 9) destroy('Shot down by gunfire');
     }
     if (r.t < 90) { const sf = surfaceAt(r.p[0], r.p[2]); if (r.p[1] <= sf.h) { r.t = 99; spawnFx(sf.water ? 'spray' : 'dust', [r.p[0], sf.h + 0.5, r.p[2]], [0, sf.water ? 9 : 4, 0], sf.water ? 1 : 0.8);
-      if (r.he) { ah64Burst([r.p[0], sf.h, r.p[2]], sf.water, 1); for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 7) { t.gh = (t.gh || 0) + 2; if (t.gh >= 5) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); ui.toast('TARGET HIT', 'Destroyed by 30 mm'); } } } } }   // 30 mm HEDP bursts on impact
+      if (r.he) { ah64Burst([r.p[0], sf.h, r.p[2]], sf.water, 1); for (const t of RANGE.targets) if (!t.dead && V3.len(V3.sub(t.p, r.p)) < 7) { t.gh = (t.gh || 0) + 2; if (t.gh >= ghMax(t)) { t.dead = 60; t.burn = 25; explode(t.p, 0.6, false); ui.toast('TARGET HIT', 'Destroyed by 30 mm'); } } } } }   // 30 mm HEDP bursts on impact
   }
   GUN.rounds = GUN.rounds.filter(r => r.t < 2.6);
 }
@@ -11088,6 +11192,7 @@ function stepWaves(dt) {
   if (AI.waveT < 9) return;
   AI.waveT = 0; AI.wave = (AI.wave || 1) + 1;
   const big = st.acd.key === 'f22';
+  if (st.acd.ah64) groundForce(Math.min(6 + AI.wave, 12));   // and a fresh armoured column for the Apache
   if (st.acd.kind === 'heli' || AI.wave >= (big ? 2 : 3)) heliGunships(Math.min(1 + Math.floor(AI.wave / 2) + (st.acd.kind === 'heli' ? 1 : 0), 5), Math.min(1, 0.4 + AI.wave * 0.1));   // enemy attack helicopters join in
   const n0 = big ? Math.min(6 + AI.wave * 2, 16) : Math.min(2 + AI.wave, 8), o = { hp: 3 + Math.min(AI.wave, 4), skill: Math.min(1, 0.4 + AI.wave * 0.12) };
   let n = carrierLaunch(big ? Math.ceil(n0 / 2) : n0, o);   // every wave comes off the carrier's catapults
@@ -11213,8 +11318,12 @@ function ejCamera(dt) {
 }
 
 // ---------- hooks ----------
-function combatReset() { GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.rockets = st.acd.ah64 ? AH64.RKT : 0; st.gunAz = st.gunEl = 0; st.ej = null; st.gunOn = false; if (st.acd.b2) b2defReset(st); else st.def = null; if (!EJ.mesh) ejBuildMeshes(); }
-function stepCombat(dt) { stepB2Def(dt); stepGun(dt); stepWaves(dt); stepSams(dt); stepEject(dt); }
+// hits a target takes from the guns: practice targets 5; the Apache's enemy armour is tougher (30 mm barely scratches a T-72)
+const ghMax = t => t.enemy ? ({ tank: 14, apc: 8, aa: 6, truck: 4 }[t.kind] || 5) : 5;
+function combatReset() {
+  RANGE.targets = RANGE.targets.filter(t => !t.enemy);   /* the enemy column goes with the old sortie */
+  GUN.rounds = []; GUN.toldEmpty = false; AI.wave = 1; AI.kills = 0; AI.waveT = 0; samReset(); const st = SIM.st, g = gunFor(st.acd); st.ammo = g ? g.ammo : 0; st.rockets = st.acd.ah64 ? AH64.RKT : 0; st.gunAz = st.gunEl = 0; st.ej = null; st.gunOn = false; if (st.acd.b2) b2defReset(st); else st.def = null; if (!EJ.mesh) ejBuildMeshes(); }
+function stepCombat(dt) { stepB2Def(dt); stepGround(dt); stepGun(dt); stepWaves(dt); stepSams(dt); stepEject(dt); }
 function drawCombat() {
   drawB2Def();
   for (const s of SAMS.sites) {
@@ -12360,8 +12469,9 @@ function crashGuard() {
   if (last && !last.clean && Date.now() - last.t < 6 * 3600e3 && last.fly) {
     setTimeout(() => ui.toast('LAST FLIGHT CLOSED UNEXPECTEDLY', CFG.quality === 'low' ? 'The phone ran out of memory' : 'Probably out of memory — graphics set one step lower'), 1500);
     if (CFG.quality !== 'low') { CFG.quality = { max: 'high', high: 'medium', medium: 'low', auto: 'low' }[CFG.quality] || 'low'; saveCFG(); }
+    CITY_T.squeeze = 0.7;   // and a tighter scenery memory budget for this session
   }
-  const beat = clean => { try { localStorage.setItem('st-alive', JSON.stringify({ t: Date.now(), clean, fly: appState === 'fly', ac: CFG.ac, q: CFG.quality, tiles: CITY_T.tiles.size })); } catch (e) {} };
+  const beat = clean => { try { localStorage.setItem('st-alive', JSON.stringify({ t: Date.now(), clean, fly: appState === 'fly', ac: CFG.ac, q: CFG.quality, tiles: CITY_T.tiles.size, mb: Math.round((CITY_T.bytes || 0) / 1e6) })); } catch (e) {} };
   beat(false); setInterval(() => beat(false), 4000);
   addEventListener('pagehide', () => beat(true));
   document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') beat(true); else beat(false); });
@@ -13524,6 +13634,10 @@ function updStick() {
 function updRud() { const el = $('rud'), k = $('rudK'), w = el.clientWidth - 34; k.style.left = (2 + (SIM.ctl.yawT + 1) / 2 * w) + 'px'; }
 // helicopter cockpit layout: collective with a hover mark, cyclic AFT/FWD, the Apache's weapon names, radar altitude,
 // and the DASE hold buttons (altitude hold, hover hold) in place of flaps/gear
+function jetModeToggle() {
+  CFG.easyFW = CFG.easyFW === false; saveCFG();
+  ui.toast(CFG.easyFW ? 'EASY FLYING' : 'REAL HANDLING', CFG.easyFW ? 'Stick = bank and climb; let go and it levels the wings and holds the climb. It won\'t let the wing stall' : 'Full aircraft handling: stick is the control surfaces (with the aircraft\'s own fly-by-wire where it has one)');
+}
 function heliUI(a) {
   const heli = a.kind === 'heli', ah = !!a.ah64;
   $('thrLab').textContent = heli ? 'COLLECTIVE' : $('thrLab').textContent;
@@ -13544,8 +13658,9 @@ function heliUI(a) {
   const bA = mk('bAltH', 'ALT HOLD', '<svg viewBox="0 0 24 24"><path d="M4 18h16M12 4v10M8 10l4 4 4-4"/></svg>', ah64AltHold);
   const bH = mk('bHvr', 'HOVER HOLD', '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/></svg>', ah64HoverToggle);
   const easy = ah && CFG.heliEasy !== false;
-  const bM = mk('bMode', 'EASY', '<svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>', heliModeToggle);
-  bM.style.display = ah ? '' : 'none'; $('bModeV').textContent = easy ? 'EASY' : 'REAL'; bM.classList.toggle('on', !easy);
+  const bM = mk('bMode', 'EASY', '<svg viewBox="0 0 24 24"><path d="M4 12h16M12 4v16"/><circle cx="12" cy="12" r="8"/></svg>', () => SIM.st.acd.ah64 ? heliModeToggle() : jetModeToggle());
+  const fw = !heli && !a.stovl && a.kind !== 'rocket', eOn = ah ? easy : CFG.easyFW !== false;
+  bM.style.display = ah || fw ? '' : 'none'; $('bModeV').textContent = eOn ? 'EASY' : 'REAL'; bM.classList.toggle('on', !eOn);
   bA.style.display = bH.style.display = ah && !easy ? '' : 'none';
   if (dm.firstChild) dm.firstChild.textContent = easy ? 'HOLD' : 'HOVER';
   if (easy) $('thrLab').textContent = 'UP · DOWN';
